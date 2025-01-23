@@ -688,8 +688,7 @@ class TFTAdapter:
     async def _autoreport(self, template, interval, **data):
         """Send periodic reports based on the specified template."""
         while self.ser_conn.connected and interval > 0:
-            report = Template(template).render(**data)
-            self._send_to_tft(f"{report}")
+            self._send_to_tft(self._report(template, **data))
             await asyncio.sleep(interval)
 
     def _set_autoreport_interval(self, task, template, interval, **data) -> None:
