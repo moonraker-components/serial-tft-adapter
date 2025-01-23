@@ -451,7 +451,7 @@ class TFTAdapter:
     def _process_klippy_disconnect(self) -> None:
         """Handle the event when Klippy disconnects."""
         # Tell the TFT that the printer is "off"
-        self._write_response({'status': 'O'})
+        self._write_response('Reset Software')
         self.last_printer_state = 'O'
         self.is_ready = False
         self.is_shutdown = self.is_shutdown = False
