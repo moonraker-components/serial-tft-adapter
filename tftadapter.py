@@ -711,6 +711,40 @@ class TFTAdapter:
             self._write_response(f"{report}")
             await asyncio.sleep(interval)
 
+    def _set_report_interval(self, task, template, interval, **data) -> None:
+        if interval > 0:
+            if task:
+                task.cancel()
+            task = self.event_loop.create_task(
+                self._report(template, interval, **data)
+            )
+        else:
+            if task:
+                task.cancel()
+                task = None
+        self._write_response("ok")
+
+    def _set_temperature_report(self, arg_s: int) -> None:
+        """Set the interval for temperature reports."""
+        self._set_report_interval(self.temperature_report_task,
+                                  f"ok {TEMPERATURE_TEMPLATE}",
+                                  arg_s,
+                                  **self.printer_state)
+
+    def _set_position_report(self, arg_s: int) -> None:
+        """Set the interval for position reports."""
+        self._set_report_interval(self.position_report_task,
+                                  POSITION_TEMPLATE,
+                                  arg_s,
+                                  **self.printer_state)
+
+    def _set_print_status_report(self, arg_s: int) -> None:
+        """Set the interval for print status reports."""
+        self._set_report_interval(self.print_status_report_task,
+                                  PRINT_STATUS_TEMPLATE,
+                                  arg_s,
+                                  **self.printer_state)
+
     def _init_sd_card(self) -> None:
         """Initialize the SD card."""
         self._write_response("SD card ok\nok")
@@ -778,40 +812,6 @@ class TFTAdapter:
             filename = "gcodes/" + filename
 
         self._write_response(f"{filename}\nok")
-
-    def _set_report_interval(self, task, template, interval, **data) -> None:
-        if interval > 0:
-            if task:
-                task.cancel()
-            task = self.event_loop.create_task(
-                self._report(template, interval, **data)
-            )
-        else:
-            if task:
-                task.cancel()
-                task = None
-        self._write_response("ok")
-
-    def _set_temperature_report(self, arg_s: int) -> None:
-        """Set the interval for temperature reports."""
-        self._set_report_interval(self.temperature_report_task,
-                                  f"ok {TEMPERATURE_TEMPLATE}",
-                                  arg_s,
-                                  **self.printer_state)
-
-    def _set_position_report(self, arg_s: int) -> None:
-        """Set the interval for position reports."""
-        self._set_report_interval(self.position_report_task,
-                                  POSITION_TEMPLATE,
-                                  arg_s,
-                                  **self.printer_state)
-
-    def _set_print_status_report(self, arg_s: int) -> None:
-        """Set the interval for print status reports."""
-        self._set_report_interval(self.print_status_report_task,
-                                  PRINT_STATUS_TEMPLATE,
-                                  arg_s,
-                                  **self.printer_state)
 
     def _report_software_endstops(self) -> None:
         """Report the status of software endstops."""
