@@ -370,7 +370,7 @@ class TFTAdapter:
                 continue
             break
 
-        self.firmware_name = "Klipper " + printer_info['software_version']
+        self.firmware_name = "Marlin | Klipper " + printer_info['software_version']
         self.config: Dict[str, Any] = cfg_status.get('configfile', {}).get('config', {})
 
         logging.info(
@@ -450,7 +450,7 @@ class TFTAdapter:
 
     def _process_klippy_disconnect(self) -> None:
         """Handle the event when Klippy disconnects."""
-        # Tell the PD that the printer is "off"
+        # Tell the TFT that the printer is "off"
         self._write_response({'status': 'O'})
         self.last_printer_state = 'O'
         self.is_ready = False
