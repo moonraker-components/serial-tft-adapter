@@ -276,8 +276,6 @@ class TFTAdapter:
             'M24': self._start_print,
             'M25': self._pause_print,
             'M27': self._set_print_status_autoreport,
-            'M30': self._delete_sd_file,
-            'M32': self._print_file,
             'M33': self._get_long_path,
             'M48': "PROBE_ACCURACY",
             'M82': self._send_ok_response,
@@ -286,7 +284,7 @@ class TFTAdapter:
             'M108': self._send_ok_response,
             'M114': self._report_position,
             'M115': self._report_firmware_info,
-            'M118': self._handle_m118_command,
+            'M118': self._serial_print,
             'M120': "SAVE_GCODE_STATE STATE=TFT",
             'M121': "RESTORE_GCODE_STATE STATE=TFT",
             'M150': self._set_led,
@@ -446,13 +444,8 @@ class TFTAdapter:
             self.event_loop.register_callback(self.klippy_apis.emergency_stop)
             return
 
-        # Execute the gcode.  Check for special RRF gcodes that
-        # require special handling
         parts = line.split()
         gcode = parts[0].strip()
-        if gcode in ["M23", "M30", "M32", "M36", "M37"]:
-            arg = line[len(gcode):].strip()
-            parts = [gcode, arg]
 
         if gcode in self.standard_gcodes:
             self.queue_task(line)
@@ -818,14 +811,14 @@ class TFTAdapter:
         """Send an 'ok' response."""
         self._write_response("ok")
 
-    def _handle_m118_command(self,
-                             arg_p: Optional[int] = None,
-                             arg_a: Optional[int] = None,
-                             arg_string: Optional[str] = None) -> None:
-        """Handle the M118 command."""
+    def _serial_print(self,
+                      arg_p: Optional[int] = None,
+                      arg_a: Optional[int] = None,
+                      arg_string: Optional[str] = None) -> None:
+        """Send serial print message."""
         if arg_p == 0:
             if arg_a == 1:
-                self._write_response(f"// {arg_string}")
+                self._write_response(f"//{arg_string}")
             else:
                 self._write_response(f"echo:{arg_string}\nok" if arg_string else "ok")
 
