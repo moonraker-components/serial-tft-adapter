@@ -239,8 +239,6 @@ class TFTAdapter:
         self.last_message: Optional[str] = None
         self.current_file: str = ""
         self.file_metadata: Dict[str, Any] = {}
-        self.enable_checksum = config.getboolean('enable_checksum', True)
-        self.debug_queue: Deque[str] = deque(maxlen=100)
         self.temperature_report_task: Optional[asyncio.Task] = None
         self.position_report_task: Optional[asyncio.Task] = None
 
@@ -442,7 +440,6 @@ class TFTAdapter:
     def process_line(self, line: str) -> None:
         """Process an incoming line of G-code."""
         logging.info("line: %s", line)
-        self.debug_queue.append(line)
         # If we find M112 in the line then skip verification
         if "M112" in line.upper():
             self.event_loop.register_callback(self.klippy_apis.emergency_stop)
@@ -706,18 +703,10 @@ class TFTAdapter:
         else:
             logging.info("Untreated response: %s", response)
 
-    async def notify_timeleft(self, timeleft):
-        """Notify the remaining time for the print."""
-        await self._write_response(action=f'notification Time Left {timeleft}')
-
-    async def notify_dataleft(self, current, max_data):
-        """Notify the remaining data for the print."""
-        await self._write_response(action=f'notification Data Left {current}/{max_data}')
-
-    async def report(self, template, interval):
+    async def _report(self, template, interval, **data):
         """Send periodic reports based on the specified template."""
         while self.ser_conn.connected and interval > 0:
-            report = Template(template).render(**self.printer_state)
+            report = Template(template).render(**data)
             self._write_response(f"{report}")
             await asyncio.sleep(interval)
 
@@ -796,7 +785,7 @@ class TFTAdapter:
             if self.temperature_report_task:
                 self.temperature_report_task.cancel()
             self.temperature_report_task = self.event_loop.create_task(
-                self.report(f"ok {TEMPERATURE_TEMPLATE}", interval)
+                self._report(f"ok {TEMPERATURE_TEMPLATE}", interval, **self.printer_state)
             )
         else:
             if self.temperature_report_task:
@@ -811,7 +800,7 @@ class TFTAdapter:
             if self.position_report_task:
                 self.position_report_task.cancel()
             self.position_report_task = self.event_loop.create_task(
-                self.report(POSITION_TEMPLATE, interval)
+                self._report(POSITION_TEMPLATE, interval, **self.printer_state)
             )
         else:
             if self.position_report_task:
@@ -826,7 +815,7 @@ class TFTAdapter:
             if self.position_report_task:
                 self.position_report_task.cancel()
             self.position_report_task = self.event_loop.create_task(
-                self.report(PRINT_STATUS_TEMPLATE, interval)
+                self._report(PRINT_STATUS_TEMPLATE, interval, **self.printer_state)
             )
         else:
             if self.position_report_task:
