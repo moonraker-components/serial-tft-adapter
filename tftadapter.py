@@ -275,7 +275,7 @@ class TFTAdapter:
             'M23': self._select_sd_file,
             'M24': self._start_print,
             'M25': self._pause_print,
-            'M27': self._set_print_status_report,
+            'M27': self._set_print_status_autoreport,
             'M30': self._delete_sd_file,
             'M32': self._print_file,
             'M33': self._get_long_path,
@@ -290,8 +290,8 @@ class TFTAdapter:
             'M120': "SAVE_GCODE_STATE STATE=TFT",
             'M121': "RESTORE_GCODE_STATE STATE=TFT",
             'M150': self._set_led,
-            'M154': self._set_position_report,
-            'M155': self._set_temperature_report,
+            'M154': self._set_position_autoreport,
+            'M155': self._set_temperature_autoreport,
             'M201': self._set_acceleration,
             'M203': self._set_velocity,
             'M206': self._set_gcode_offset,
@@ -720,21 +720,21 @@ class TFTAdapter:
                 task = None
         self._write_response("ok")
 
-    def _set_temperature_report(self, arg_s: int) -> None:
+    def _set_temperature_autoreport(self, arg_s: int) -> None:
         """Set the interval for temperature reports."""
         self._set_autoreport_interval(self.temperature_report_task,
                                       f"ok {TEMPERATURE_TEMPLATE}",
                                       arg_s,
                                       **self.printer_state)
 
-    def _set_position_report(self, arg_s: int) -> None:
+    def _set_position_autoreport(self, arg_s: int) -> None:
         """Set the interval for position reports."""
         self._set_autoreport_interval(self.position_report_task,
                                       POSITION_TEMPLATE,
                                       arg_s,
                                       **self.printer_state)
 
-    def _set_print_status_report(self, arg_s: int) -> None:
+    def _set_print_status_autoreport(self, arg_s: int) -> None:
         """Set the interval for print status reports."""
         self._set_autoreport_interval(self.print_status_report_task,
                                       PRINT_STATUS_TEMPLATE,
