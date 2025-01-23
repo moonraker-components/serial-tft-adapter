@@ -220,8 +220,7 @@ class SerialConnection:
                 self.tft.process_line(decoded_line)
             except ServerError:
                 logging.exception("GCode Processing Error: %s", decoded_line)
-                self.tft.handle_gcode_response(
-                    f"!! GCode Processing Error: {decoded_line}")
+                self._send_to_tft(error=f"!! GCode Processing Error: {decoded_line}")
             except Exception:
                 logging.exception("Error during gcode processing")
 
@@ -304,6 +303,7 @@ class TFTAdapter:
             'M701': self._load_filament,
             'M702': self._unload_filament,
             'M851': self._set_probe_offset,
+            'M876': self._send_ok_response,
             'T0': self._send_ok_response,
         }
 
@@ -515,8 +515,8 @@ class TFTAdapter:
             self._send_to_tft(response)
         except self.server.error:
             msg = f"Error executing script {script}"
-            self.handle_gcode_response("!! " + msg)
             logging.exception(msg)
+            self._send_to_tft(error=msg)
 
     async def _process_command(self, item: Tuple[FlexCallback, Any]) -> None:
         """Process a command task."""
@@ -637,12 +637,12 @@ class TFTAdapter:
 
     def handle_gcode_response(self, response: str) -> None:
         """Handle the response from a G-code command."""
-        if "// Sending" in response:
+        if "// Sending" in response or ("B:" in response and "T0:" in response):
             return
 
         logging.info("response: %s" % response)
         if "Klipper state" in response or response.startswith('!!'):
-            self._send_to_tft(action=f"notification {response}")
+            logging.error("response: %s" % response)
         elif response.startswith('File opened:') or \
              response.startswith('File selected') or \
              response.startswith('ok'):
@@ -654,12 +654,12 @@ class TFTAdapter:
             formatted_timeleft = f"{hours}h{minutes}m00s"
             self._send_to_tft(action=f"notification Time Left {formatted_timeleft}")
         elif response.startswith('//'):
-            message = response[3:]
-            if "probe: open" in message:
-                response = f"{Template(PROBE_TEST_TEMPLATE).render(**self.printer_state)}\nok"
-                self._send_to_tft(response)
-            elif "probe accuracy results:" in message:
-                parts = message.split(',')
+            if "probe: open" in response:
+                self._send_to_tft(
+                    f"{Template(PROBE_TEST_TEMPLATE).render(**self.printer_state)}\nok"
+                )
+            elif "probe accuracy results:" in response:
+                parts = response[3:].split(',')
                 data = {
                     "max_val": parts[0].split()[-1],
                     "min_val": parts[1].split()[-1],
@@ -667,21 +667,19 @@ class TFTAdapter:
                     "avg_val": parts[3].split()[-1],
                     "stddev_val": parts[5].split()[-1]
                 }
-                marlin_response = Template(PROBE_ACCURACY_TEMPLATE).render(**data)
-                self._send_to_tft(marlin_response)
-            elif "Unknown command" in message:
-                self._send_to_tft(error=message)
-        elif "B:" in response and "T0:" in response:
-            parts = response.split()
-            bed_temp = float(parts[0].split(":")[1])
-            bed_target = float(parts[1].split("/")[1])
-            extruder_temp = float(parts[2].split(":")[1])
-            extruder_target = float(parts[3].split("/")[1])
-            temperature_response = Template(TEMPERATURE_TEMPLATE).render(
-                extruder={"temperature": extruder_temp, "target": extruder_target},
-                heater_bed={"temperature": bed_temp, "target": bed_target}
-            )
-            self._send_to_tft(f"ok {temperature_response}")
+                self._send_to_tft(Template(PROBE_ACCURACY_TEMPLATE).render(**data))
+            elif "prompt_begin" in response:
+                self._send_to_tft(action="prompt_end")
+            elif "prompt_text" in response:
+                self._send_to_tft(action=f"prompt_begin {response[23:]}")
+            elif "prompt_footer_button" in response:
+                self._send_to_tft(action=f"prompt_button Ok")
+                self._send_to_tft(action=f"prompt_button info")
+                self._send_to_tft(action=f"prompt_show")
+            elif "Unknown command" in response:
+                self._send_to_tft(error=response[3:])
+            else:
+                self._send_to_tft(response)
         else:
             logging.info("Untreated response: %s", response)
 
