@@ -241,6 +241,7 @@ class TFTAdapter:
         self.file_metadata: Dict[str, Any] = {}
         self.temperature_report_task: Optional[asyncio.Task] = None
         self.position_report_task: Optional[asyncio.Task] = None
+        self.print_status_report_task: Optional[asyncio.Task] = None
 
         # Initialize tracked state.
         kconn: KlippyConnection = self.server.lookup_component("klippy_connection")
@@ -812,15 +813,15 @@ class TFTAdapter:
         """Set the interval for print status reports."""
         interval = arg_s
         if interval > 0:
-            if self.position_report_task:
-                self.position_report_task.cancel()
-            self.position_report_task = self.event_loop.create_task(
+            if self.print_status_report_task:
+                self.print_status_report_task.cancel()
+            self.print_status_report_task = self.event_loop.create_task(
                 self._report(PRINT_STATUS_TEMPLATE, interval, **self.printer_state)
             )
         else:
-            if self.position_report_task:
-                self.position_report_task.cancel()
-                self.position_report_task = None
+            if self.print_status_report_task:
+                self.print_status_report_task.cancel()
+                self.print_status_report_task = None
         self._write_response("ok")
 
     def _report_software_endstops(self) -> None:
@@ -919,6 +920,8 @@ class TFTAdapter:
             self.temperature_report_task.cancel()
         if self.position_report_task:
             self.position_report_task.cancel()
+        if self.print_status_report_task:
+            self.print_status_report_task.cancel()
         msg = "\nTFT GCode Dump:"
         for i, gc in enumerate(self.debug_queue):
             msg += f"\nSequence {i}: {gc}"
