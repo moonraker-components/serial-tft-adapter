@@ -259,9 +259,6 @@ class TFTAdapter:
         self.last_printer_state: str = 'O'
         self.last_update_time: float = 0.
 
-        # Set up macros
-        self.available_macros: Dict[str, str] = {}
-        self._initialize_macros(config)
         self.ser_conn = SerialConnection(config, self)
         logging.info("TFT Configured")
 
@@ -317,20 +314,6 @@ class TFTAdapter:
         self.standard_gcodes: List[str] = [
             'G0', 'G1', 'G28', 'G90', 'M84', 'M104', 'M106', 'M140'
         ]
-
-    def _initialize_macros(self, config: ConfigHelper) -> None:
-        """Initialize macros from the configuration."""
-        self.confirmed_macros = {
-            "RESTART": "RESTART",
-            "FIRMWARE_RESTART": "FIRMWARE_RESTART"}
-        macros = config.getlist('macros', None)
-        if macros is not None:
-            self.available_macros = {m.split()[0]: m for m in macros}
-        conf_macros = config.getlist('confirmed_macros', None)
-        if conf_macros is not None:
-            self.confirmed_macros = {m.split()[0]: m for m in conf_macros}
-        self.available_macros.update(self.confirmed_macros)
-        self.non_trivial_keys = config.getlist('non_trivial_keys', ["Klipper state"])
 
     def _register_server_events(self) -> None:
         """Register server event handlers."""
@@ -761,27 +744,17 @@ class TFTAdapter:
         response: Dict[str, Any] = {'dir': path}
         response['files'] = []
 
-        if path == "/macros":
-            response['files'] = [(macro, 0) for macro in self.available_macros.keys()]
-        else:
-            # HACK: The TFT has a bug where it does not correctly detect
-            # subdirectories if we return the root as "/".  Moonraker can
-            # support a "gcodes" directory, however we must choose between this
-            # support or disabling RRF specific gcodes (this is done by
-            # identifying as Repetier).
-            # The workaround below converts both "/" and "/gcodes" paths to
-            # "gcodes".
-            if path == "/":
-                response['dir'] = "/gcodes"
-                path = "gcodes"
-            elif path.startswith("/gcodes"):
-                path = path[1:]
+        if path == "/":
+            response['dir'] = "/gcodes"
+            path = "gcodes"
+        elif path.startswith("/gcodes"):
+            path = path[1:]
 
-            flist = self.file_manager.list_dir(path, simple_format=False)
-            if flist:
-                response['files'] = [
-                    (file['filename'], file['size']) for file in flist.get("files")
-                ]
+        flist = self.file_manager.list_dir(path, simple_format=False)
+        if flist:
+            response['files'] = [
+                (file['filename'], file['size']) for file in flist.get("files")
+            ]
 
         marlin_response = Template(FILE_LIST_TEMPLATE).render(files=response['files'])
         self._write_response(marlin_response)
@@ -870,12 +843,7 @@ class TFTAdapter:
 
     def _report_settings(self, arg_s: Optional[str] = None) -> None:
         """Report the printer settings."""
-        report = Template(REPORT_SETTINGS_TEMPLATE).render(
-            **(
-                self.printer_state |
-                self.config
-            )
-        )
+        report = Template(REPORT_SETTINGS_TEMPLATE).render(**(self.printer_state |self.config))
         self._write_response(f"{report}\nok")
 
     def _send_ok_response(self, **args: Dict[float]) -> None:
