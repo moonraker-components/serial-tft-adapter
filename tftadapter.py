@@ -235,6 +235,7 @@ class TFTAdapter:
         self.klippy_apis: APIComp = self.server.lookup_component('klippy_apis')
         self.machine_name = config.get('machine_name', "Klipper")
         self.firmware_name: str = "Klipper"
+        self.filament_sensor: str = config.get('filament_sensor')
         self.last_message: Optional[str] = None
         self.current_file: str = ""
         self.file_metadata: Dict[str, Any] = {}
@@ -368,7 +369,7 @@ class TFTAdapter:
             "print_stats": None,
             "idle_timeout": None,
             "probe": None,
-            "filament_switch_sensor filament_sensor": None
+            self.filament_sensor: None
         }
         self.extruder_count = 0
         self.heaters = []
@@ -793,7 +794,7 @@ class TFTAdapter:
 
     def _report_software_endstops(self) -> None:
         """Report the status of software endstops."""
-        filament_sensor=self.printer_state.get("filament_switch_sensor filament_sensor", {})
+        filament_sensor=self.printer_state.get(self.filament_sensor, {})
         state = { "state": "On" if filament_sensor.get("enabled", False) else "Off"}
         self._report(f"{SOFTWARE_ENDSTOPS_TEMPLATE}\nok", **state)
 
