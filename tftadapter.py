@@ -252,7 +252,6 @@ class TFTAdapter:
         self.is_ready: bool = False
         self.is_shutdown: bool = False
         self.initialized: bool = False
-        self.cq_busy: bool = False
         self.gq_busy: bool = False
         self.queue: List[Union[str, Tuple[FlexCallback, Any]]] = []
         self.last_printer_state: str = 'O'
