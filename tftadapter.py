@@ -528,6 +528,56 @@ class TFTAdapter:
         except Exception:
             logging.exception("Error processing command")
 
+    def _report(self, template, **data):
+        """Send report to tft."""
+        self._send_to_tft(Template(template).render(**data))
+
+    def handle_gcode_response(self, response: str) -> None:
+        """Handle the response from a G-code command."""
+        if "// Sending" in response or ("B:" in response and "T0:" in response):
+            return
+
+        logging.info("response: %s" % response)
+        if "Klipper state" in response or response.startswith('!!'):
+            logging.error("response: %s" % response)
+        elif response.startswith('File opened:') or \
+             response.startswith('File selected') or \
+             response.startswith('ok'):
+            self._send_to_tft(response)
+        elif response.startswith('echo: Adjusted Print Time'):
+            timeleft = response.split('echo: Adjusted Print Time')[-1].strip()
+            hours, minutes = timeleft.split('hr')
+            minutes = minutes.strip().replace('min', '')
+            formatted_timeleft = f"{hours}h{minutes}m00s"
+            self._send_to_tft(action=f"notification Time Left {formatted_timeleft}")
+        elif response.startswith('//'):
+            if "probe: open" in response:
+                self._report(f"PROBE_TEST_TEMPLATE\nok", **self.printer_state)
+            elif "probe accuracy results:" in response:
+                parts = response[3:].split(',')
+                data = {
+                    "max_val": parts[0].split()[-1],
+                    "min_val": parts[1].split()[-1],
+                    "range_val": parts[2].split()[-1],
+                    "avg_val": parts[3].split()[-1],
+                    "stddev_val": parts[5].split()[-1]
+                }
+                self._report(f"PROBE_ACCURACY_TEMPLATE\nok", **data)
+            elif "prompt_begin" in response:
+                self._send_to_tft(action="prompt_end")
+            elif "prompt_text" in response:
+                self._send_to_tft(action=f"prompt_begin {response[23:]}")
+            elif "prompt_footer_button" in response:
+                self._send_to_tft(action=f"prompt_button Ok")
+                self._send_to_tft(action=f"prompt_button info")
+                self._send_to_tft(action=f"prompt_show")
+            elif "Unknown command" in response:
+                self._send_to_tft(error=response[3:])
+            else:
+                self._send_to_tft(response)
+        else:
+            logging.info("Untreated response: %s", response)
+
     def _clean_filename(self, filename: str) -> str:
         """Clean up the filename by removing unnecessary parts."""
         # Remove quotes and whitespace
@@ -634,54 +684,6 @@ class TFTAdapter:
         else:
             # TODO: Falta implementar M420 V1 T1 y M420 Zx.xx
             self._send_to_tft("ok")
-
-    def handle_gcode_response(self, response: str) -> None:
-        """Handle the response from a G-code command."""
-        if "// Sending" in response or ("B:" in response and "T0:" in response):
-            return
-
-        logging.info("response: %s" % response)
-        if "Klipper state" in response or response.startswith('!!'):
-            logging.error("response: %s" % response)
-        elif response.startswith('File opened:') or \
-             response.startswith('File selected') or \
-             response.startswith('ok'):
-            self._send_to_tft(response)
-        elif response.startswith('echo: Adjusted Print Time'):
-            timeleft = response.split('echo: Adjusted Print Time')[-1].strip()
-            hours, minutes = timeleft.split('hr')
-            minutes = minutes.strip().replace('min', '')
-            formatted_timeleft = f"{hours}h{minutes}m00s"
-            self._send_to_tft(action=f"notification Time Left {formatted_timeleft}")
-        elif response.startswith('//'):
-            if "probe: open" in response:
-                self._send_to_tft(
-                    f"{Template(PROBE_TEST_TEMPLATE).render(**self.printer_state)}\nok"
-                )
-            elif "probe accuracy results:" in response:
-                parts = response[3:].split(',')
-                data = {
-                    "max_val": parts[0].split()[-1],
-                    "min_val": parts[1].split()[-1],
-                    "range_val": parts[2].split()[-1],
-                    "avg_val": parts[3].split()[-1],
-                    "stddev_val": parts[5].split()[-1]
-                }
-                self._send_to_tft(Template(PROBE_ACCURACY_TEMPLATE).render(**data))
-            elif "prompt_begin" in response:
-                self._send_to_tft(action="prompt_end")
-            elif "prompt_text" in response:
-                self._send_to_tft(action=f"prompt_begin {response[23:]}")
-            elif "prompt_footer_button" in response:
-                self._send_to_tft(action=f"prompt_button Ok")
-                self._send_to_tft(action=f"prompt_button info")
-                self._send_to_tft(action=f"prompt_show")
-            elif "Unknown command" in response:
-                self._send_to_tft(error=response[3:])
-            else:
-                self._send_to_tft(response)
-        else:
-            logging.info("Untreated response: %s", response)
 
     async def _autoreport(self, template, interval, **data):
         """Send periodic reports based on the specified template."""
@@ -796,13 +798,11 @@ class TFTAdapter:
         """Report the status of software endstops."""
         filament_sensor=self.printer_state.get("filament_switch_sensor filament_sensor", {})
         state = { "state": "On" if filament_sensor.get("enabled", False) else "Off"}
-        report = Template(SOFTWARE_ENDSTOPS_TEMPLATE).render(**state)
-        self._send_to_tft(f"{report}\nok")
+        self._report(f"{SOFTWARE_ENDSTOPS_TEMPLATE}\nok", **state)
 
     def _report_settings(self, arg_s: Optional[str] = None) -> None:
         """Report the printer settings."""
-        report = Template(REPORT_SETTINGS_TEMPLATE).render(**(self.printer_state |self.config))
-        self._send_to_tft(f"{report}\nok")
+        self._report(f"{REPORT_SETTINGS_TEMPLATE}\nok", **(self.printer_state |self.config))
 
     def _send_ok_response(self, **args: Dict[float]) -> None:
         """Send an 'ok' response."""
@@ -846,8 +846,7 @@ class TFTAdapter:
     def _set_probe_offset(self, **args: Dict[float]) -> None:
         """Set the probe offsets."""
         if not args:
-            response = Template(PROBE_OFFSET_TEMPLATE).render(**(self.printer_state|self.config))
-            self._send_to_tft(f"{response}")
+            self._send_to_tft(PROBE_OFFSET_TEMPLATE, **(self.printer_state|self.config))
         self._send_to_tft("ok")
 
     def _load_filament(self) -> None:
@@ -896,32 +895,30 @@ class TFTAdapter:
         if arg_s is not None:
             self.queue_task(f"M220 S{arg_s}")
         else:
-            self._send_to_tft(Template(f"{FEED_RATE_TEMPLATE}\nok").render(**self.printer_state))
+            self._report(f"{FEED_RATE_TEMPLATE}\nok", **self.printer_state)
 
     def _set_flow_rate(self, arg_s: Optional[int] = None, arg_d: Optional[int] = None) -> None:
         """Set the flow rate."""
         if arg_s is not None:
             self.queue_task(f"M221 S{arg_s}")
         else:
-            self._send_to_tft(Template(f"{FLOW_RATE_TEMPLATE}\nok").render(**self.printer_state))
+            self._report(f"{FLOW_RATE_TEMPLATE}\nok", **self.printer_state)
 
     def _report_temperature(self) -> None:
         """Report the current temperature."""
-        report = Template(TEMPERATURE_TEMPLATE).render(**self.printer_state)
-        self._send_to_tft(f"{report}\nok")
+        self._report(f"{TEMPERATURE_TEMPLATE}\nok", **self.printer_state)
 
     def _report_position(self) -> None:
         """Report the current position."""
-        report = Template(POSITION_TEMPLATE).render(**self.printer_state)
-        self._send_to_tft(f"{report}\nok")
+        self._report(f"{POSITION_TEMPLATE}\nok", **self.printer_state)
 
     def _report_firmware_info(self) -> None:
         """Report the firmware information."""
-        report = Template(FIRMWARE_INFO_TEMPLATE).render(**(
+        self._report(FIRMWARE_INFO_TEMPLATE, **(
             self.printer_state |
             { "machine_name": self.machine_name } |
-            { "firmware_name": self.firmware_name }))
-        self._send_to_tft(f"{report}\nok")
+            { "firmware_name": self.firmware_name })
+        )
 
     def _z_offset_apply_probe(self) -> List[str]:
         """Apply the Z offset from the probe."""
