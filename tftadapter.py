@@ -446,20 +446,18 @@ class TFTAdapter:
             self.event_loop.register_callback(self.klippy_apis.emergency_stop)
             return
 
-        script = line
         # Execute the gcode.  Check for special RRF gcodes that
         # require special handling
-        parts = script.split()
+        parts = line.split()
         gcode = parts[0].strip()
         if gcode in ["M23", "M30", "M32", "M36", "M37"]:
-            arg = script[len(gcode):].strip()
+            arg = line[len(gcode):].strip()
             parts = [gcode, arg]
 
-        # Check for commands that query state and require immediate response
-        if gcode in self.direct_gcodes or gcode in self.standard_gcodes:
-            if gcode in self.standard_gcodes:
-                self.queue_task(script)
-                return
+        if gcode in self.standard_gcodes:
+            self.queue_task(line)
+
+        elif gcode in self.direct_gcodes:
             if isinstance(self.direct_gcodes[gcode], str):
                 self.queue_task(self.direct_gcodes[gcode])
                 return
@@ -485,12 +483,7 @@ class TFTAdapter:
             return
         else:
             logging.warning("Unregistered command: %s", line)
-            script = line
-
-        if not script:
-            logging.warning("No script generated for command: %s", line)
-            return
-        self.queue_task(script)
+            self.queue_task(line)
 
     def queue_task(self, task: Union[str, List[str], Tuple[FlexCallback, Any]]) -> None:
         """Queue a task for execution."""
