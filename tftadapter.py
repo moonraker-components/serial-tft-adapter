@@ -779,50 +779,39 @@ class TFTAdapter:
 
         self._write_response(f"{filename}\nok")
 
-    def _set_temperature_report(self, arg_s: int) -> None:
-        """Set the interval for temperature reports."""
-        interval = arg_s
+    def _set_report_interval(self, task, template, interval, **data) -> None:
         if interval > 0:
-            if self.temperature_report_task:
-                self.temperature_report_task.cancel()
-            self.temperature_report_task = self.event_loop.create_task(
-                self._report(f"ok {TEMPERATURE_TEMPLATE}", interval, **self.printer_state)
+            if task:
+                task.cancel()
+            task = self.event_loop.create_task(
+                self._report(template, interval, **data)
             )
         else:
-            if self.temperature_report_task:
-                self.temperature_report_task.cancel()
-                self.temperature_report_task = None
+            if task:
+                task.cancel()
+                task = None
         self._write_response("ok")
+
+    def _set_temperature_report(self, arg_s: int) -> None:
+        """Set the interval for temperature reports."""
+        self._set_report_interval(self.temperature_report_task,
+                                  f"ok {TEMPERATURE_TEMPLATE}",
+                                  arg_s,
+                                  **self.printer_state)
 
     def _set_position_report(self, arg_s: int) -> None:
         """Set the interval for position reports."""
-        interval = arg_s
-        if interval > 0:
-            if self.position_report_task:
-                self.position_report_task.cancel()
-            self.position_report_task = self.event_loop.create_task(
-                self._report(POSITION_TEMPLATE, interval, **self.printer_state)
-            )
-        else:
-            if self.position_report_task:
-                self.position_report_task.cancel()
-                self.position_report_task = None
-        self._write_response("ok")
+        self._set_report_interval(self.position_report_task,
+                                  POSITION_TEMPLATE,
+                                  arg_s,
+                                  **self.printer_state)
 
     def _set_print_status_report(self, arg_s: int) -> None:
         """Set the interval for print status reports."""
-        interval = arg_s
-        if interval > 0:
-            if self.print_status_report_task:
-                self.print_status_report_task.cancel()
-            self.print_status_report_task = self.event_loop.create_task(
-                self._report(PRINT_STATUS_TEMPLATE, interval, **self.printer_state)
-            )
-        else:
-            if self.print_status_report_task:
-                self.print_status_report_task.cancel()
-                self.print_status_report_task = None
-        self._write_response("ok")
+        self._set_report_interval(self.print_status_report_task,
+                                  PRINT_STATUS_TEMPLATE,
+                                  arg_s,
+                                  **self.printer_state)
 
     def _report_software_endstops(self) -> None:
         """Report the status of software endstops."""
