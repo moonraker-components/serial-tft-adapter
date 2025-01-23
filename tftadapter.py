@@ -392,7 +392,7 @@ class TFTAdapter:
         self.is_ready = True
         self.event_loop.create_task(self._monitor_print_status())
 
-    def _write_response(self, message=None, command=None, action=None, error=None) -> None:
+    def _send_to_tft(self, message=None, command=None, action=None, error=None) -> None:
         """Write a response to the serial connection."""
         if command:
             msg = f'{command}'
@@ -415,13 +415,13 @@ class TFTAdapter:
             print_stats = self.printer_state.get('print_stats', {})
             state = print_stats.get('state', 'standby')
             if state == 'printing' and self.last_printer_state != 'printing':
-                self._write_response(action="print_start")
+                self._send_to_tft(action="print_start")
             elif state == 'paused' and self.last_printer_state == 'paused':
-                self._write_response(action="pause")
+                self._send_to_tft(action="pause")
             elif state == 'printing' and self.last_printer_state == 'paused':
-                self._write_response(action="resume")
+                self._send_to_tft(action="resume")
             elif state == 'cancelled' and self.last_printer_state != 'cancelled':
-                self._write_response(action="cancel")
+                self._send_to_tft(action="cancel")
             self.last_printer_state = state
 
     def _process_klippy_shutdown(self) -> None:
@@ -431,7 +431,7 @@ class TFTAdapter:
     def _process_klippy_disconnect(self) -> None:
         """Handle the event when Klippy disconnects."""
         # Tell the TFT that the printer is "off"
-        self._write_response('Reset Software')
+        self._send_to_tft('Reset Software')
         self.last_printer_state = 'O'
         self.is_ready = False
         self.is_shutdown = self.is_shutdown = False
@@ -513,7 +513,7 @@ class TFTAdapter:
                 else:
                     response = await self.klippy_apis.run_gcode(script)
                 logging.info("end script return: %s", response)
-            self._write_response(response)
+            self._send_to_tft(response)
         except self.server.error:
             msg = f"Error executing script {script}"
             self.handle_gcode_response("!! " + msg)
@@ -561,7 +561,7 @@ class TFTAdapter:
         elif sd_state in ("standby", "cancelled"):
             self.queue_task(f"SDCARD_PRINT_FILE FILENAME=\"{self.current_file}\"")
         else:
-            self._write_response(error="Cannot start printing, printer is not in a stopped state")
+            self._send_to_tft(error="Cannot start printing, printer is not in a stopped state")
 
     def _pause_print(self, arg_p: int) -> None:
         """Pause the current print."""
@@ -570,7 +570,7 @@ class TFTAdapter:
         if sd_state == "printing":
             self.queue_task("PAUSE")
         else:
-            self._write_response(error="Cannot pause, printer is not printing")
+            self._send_to_tft(error="Cannot pause, printer is not printing")
 
     def _probe_command(self, arg_p: int, arg_s: int) -> None:
         """Handle probe commands."""
@@ -634,7 +634,7 @@ class TFTAdapter:
                 self.queue_task("BED_MESH_PROFILE LOAD=default")
         else:
             # TODO: Falta implementar M420 V1 T1 y M420 Zx.xx
-            self._write_response("ok")
+            self._send_to_tft("ok")
 
     def handle_gcode_response(self, response: str) -> None:
         """Handle the response from a G-code command."""
@@ -643,22 +643,22 @@ class TFTAdapter:
 
         logging.info("response: %s" % response)
         if "Klipper state" in response or response.startswith('!!'):
-            self._write_response(action=f"notification {response}")
+            self._send_to_tft(action=f"notification {response}")
         elif response.startswith('File opened:') or \
              response.startswith('File selected') or \
              response.startswith('ok'):
-            self._write_response(response)
+            self._send_to_tft(response)
         elif response.startswith('echo: Adjusted Print Time'):
             timeleft = response.split('echo: Adjusted Print Time')[-1].strip()
             hours, minutes = timeleft.split('hr')
             minutes = minutes.strip().replace('min', '')
             formatted_timeleft = f"{hours}h{minutes}m00s"
-            self._write_response(action=f"notification Time Left {formatted_timeleft}")
+            self._send_to_tft(action=f"notification Time Left {formatted_timeleft}")
         elif response.startswith('//'):
             message = response[3:]
             if "probe: open" in message:
                 response = f"{Template(PROBE_TEST_TEMPLATE).render(**self.printer_state)}\nok"
-                self._write_response(response)
+                self._send_to_tft(response)
             elif "probe accuracy results:" in message:
                 parts = message.split(',')
                 data = {
@@ -669,9 +669,9 @@ class TFTAdapter:
                     "stddev_val": parts[5].split()[-1]
                 }
                 marlin_response = Template(PROBE_ACCURACY_TEMPLATE).render(**data)
-                self._write_response(marlin_response)
+                self._send_to_tft(marlin_response)
             elif "Unknown command" in message:
-                self._write_response(error=message)
+                self._send_to_tft(error=message)
         elif "B:" in response and "T0:" in response:
             parts = response.split()
             bed_temp = float(parts[0].split(":")[1])
@@ -682,7 +682,7 @@ class TFTAdapter:
                 extruder={"temperature": extruder_temp, "target": extruder_target},
                 heater_bed={"temperature": bed_temp, "target": bed_target}
             )
-            self._write_response(f"ok {temperature_response}")
+            self._send_to_tft(f"ok {temperature_response}")
         else:
             logging.info("Untreated response: %s", response)
 
@@ -690,7 +690,7 @@ class TFTAdapter:
         """Send periodic reports based on the specified template."""
         while self.ser_conn.connected and interval > 0:
             report = Template(template).render(**data)
-            self._write_response(f"{report}")
+            self._send_to_tft(f"{report}")
             await asyncio.sleep(interval)
 
     def _set_autoreport_interval(self, task, template, interval, **data) -> None:
@@ -704,7 +704,7 @@ class TFTAdapter:
             if task:
                 task.cancel()
                 task = None
-        self._write_response("ok")
+        self._send_to_tft("ok")
 
     def _set_temperature_autoreport(self, arg_s: int) -> None:
         """Set the interval for temperature reports."""
@@ -729,7 +729,7 @@ class TFTAdapter:
 
     def _init_sd_card(self) -> None:
         """Initialize the SD card."""
-        self._write_response("SD card ok\nok")
+        self._send_to_tft("SD card ok\nok")
 
     def _list_sd_files(self, arg_string: Optional[str] = None) -> None:
         """List the files on the SD card."""
@@ -763,7 +763,7 @@ class TFTAdapter:
             ]
 
         marlin_response = Template(FILE_LIST_TEMPLATE).render(files=response['files'])
-        self._write_response(marlin_response)
+        self._send_to_tft(marlin_response)
 
     async def _delete_sd_file(self, arg_string: str = "") -> None:
         """Delete a file from the SD card."""
@@ -782,7 +782,7 @@ class TFTAdapter:
         """Get the full path of a file."""
         filename: Optional[str] = arg_string
         if filename is None:
-            self._write_response(error="Missing filename\nok")
+            self._send_to_tft(error="Missing filename\nok")
             return
 
         # Clean up the filename
@@ -793,23 +793,23 @@ class TFTAdapter:
         if not filename.startswith("gcodes/"):
             filename = "gcodes/" + filename
 
-        self._write_response(f"{filename}\nok")
+        self._send_to_tft(f"{filename}\nok")
 
     def _report_software_endstops(self) -> None:
         """Report the status of software endstops."""
         filament_sensor=self.printer_state.get("filament_switch_sensor filament_sensor", {})
         state = { "state": "On" if filament_sensor.get("enabled", False) else "Off"}
         report = Template(SOFTWARE_ENDSTOPS_TEMPLATE).render(**state)
-        self._write_response(f"{report}\nok")
+        self._send_to_tft(f"{report}\nok")
 
     def _report_settings(self, arg_s: Optional[str] = None) -> None:
         """Report the printer settings."""
         report = Template(REPORT_SETTINGS_TEMPLATE).render(**(self.printer_state |self.config))
-        self._write_response(f"{report}\nok")
+        self._send_to_tft(f"{report}\nok")
 
     def _send_ok_response(self, **args: Dict[float]) -> None:
         """Send an 'ok' response."""
-        self._write_response("ok")
+        self._send_to_tft("ok")
 
     def _serial_print(self,
                       arg_p: Optional[int] = None,
@@ -818,9 +818,9 @@ class TFTAdapter:
         """Send serial print message."""
         if arg_p == 0:
             if arg_a == 1:
-                self._write_response(f"//{arg_string}")
+                self._send_to_tft(f"//{arg_string}")
             else:
-                self._write_response(f"echo:{arg_string}\nok" if arg_string else "ok")
+                self._send_to_tft(f"echo:{arg_string}\nok" if arg_string else "ok")
 
     def _set_acceleration(self, **args: Dict[float]) -> None:
         """Set the acceleration limits."""
@@ -850,8 +850,8 @@ class TFTAdapter:
         """Set the probe offsets."""
         if not args:
             response = Template(PROBE_OFFSET_TEMPLATE).render(**(self.printer_state|self.config))
-            self._write_response(f"{response}")
-        self._write_response("ok")
+            self._send_to_tft(f"{response}")
+        self._send_to_tft("ok")
 
     def _load_filament(self) -> None:
         """Load filament into the extruder."""
@@ -899,24 +899,24 @@ class TFTAdapter:
         if arg_s is not None:
             self.queue_task(f"M220 S{arg_s}")
         else:
-            self._write_response(Template(f"{FEED_RATE_TEMPLATE}\nok").render(**self.printer_state))
+            self._send_to_tft(Template(f"{FEED_RATE_TEMPLATE}\nok").render(**self.printer_state))
 
     def _set_flow_rate(self, arg_s: Optional[int] = None, arg_d: Optional[int] = None) -> None:
         """Set the flow rate."""
         if arg_s is not None:
             self.queue_task(f"M221 S{arg_s}")
         else:
-            self._write_response(Template(f"{FLOW_RATE_TEMPLATE}\nok").render(**self.printer_state))
+            self._send_to_tft(Template(f"{FLOW_RATE_TEMPLATE}\nok").render(**self.printer_state))
 
     def _report_temperature(self) -> None:
         """Report the current temperature."""
         report = Template(TEMPERATURE_TEMPLATE).render(**self.printer_state)
-        self._write_response(f"{report}\nok")
+        self._send_to_tft(f"{report}\nok")
 
     def _report_position(self) -> None:
         """Report the current position."""
         report = Template(POSITION_TEMPLATE).render(**self.printer_state)
-        self._write_response(f"{report}\nok")
+        self._send_to_tft(f"{report}\nok")
 
     def _report_firmware_info(self) -> None:
         """Report the firmware information."""
@@ -924,13 +924,13 @@ class TFTAdapter:
             self.printer_state |
             { "machine_name": self.machine_name } |
             { "firmware_name": self.firmware_name }))
-        self._write_response(f"{report}\nok")
+        self._send_to_tft(f"{report}\nok")
 
     def _z_offset_apply_probe(self) -> List[str]:
         """Apply the Z offset from the probe."""
         sd_state = self.printer_state.get("print_stats", {}).get("state", "standby")
         if sd_state in ("printing", "paused"):
-            self._write_response(error="Not saved - Printing")
+            self._send_to_tft(error="Not saved - Printing")
         else:
             self.queue_task(["Z_OFFSET_APPLY_PROBE", "SAVE_CONFIG"])
 
