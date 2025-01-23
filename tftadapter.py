@@ -532,6 +532,40 @@ class TFTAdapter:
         """Send report to tft."""
         self._send_to_tft(Template(template).render(**data))
 
+    def _set_autoreport_interval(self, task, template, interval, **data) -> None:
+        if interval > 0:
+            if task:
+                task.cancel()
+            task = self.event_loop.create_task(
+                self._autoreport(template, interval, **data)
+            )
+        else:
+            if task:
+                task.cancel()
+                task = None
+        self._send_to_tft("ok")
+
+    def _set_temperature_autoreport(self, arg_s: int) -> None:
+        """Set the interval for temperature reports."""
+        self._set_autoreport_interval(self.temperature_report_task,
+                                      f"ok {TEMPERATURE_TEMPLATE}",
+                                      arg_s,
+                                      **self.printer_state)
+
+    def _set_position_autoreport(self, arg_s: int) -> None:
+        """Set the interval for position reports."""
+        self._set_autoreport_interval(self.position_report_task,
+                                      POSITION_TEMPLATE,
+                                      arg_s,
+                                      **self.printer_state)
+
+    def _set_print_status_autoreport(self, arg_s: int) -> None:
+        """Set the interval for print status reports."""
+        self._set_autoreport_interval(self.print_status_report_task,
+                                      PRINT_STATUS_TEMPLATE,
+                                      arg_s,
+                                      **self.printer_state)
+
     def handle_gcode_response(self, response: str) -> None:
         """Handle the response from a G-code command."""
         if "// Sending" in response or ("B:" in response and "T0:" in response):
@@ -691,40 +725,6 @@ class TFTAdapter:
             self._send_to_tft(self._report(template, **data))
             await asyncio.sleep(interval)
 
-    def _set_autoreport_interval(self, task, template, interval, **data) -> None:
-        if interval > 0:
-            if task:
-                task.cancel()
-            task = self.event_loop.create_task(
-                self._autoreport(template, interval, **data)
-            )
-        else:
-            if task:
-                task.cancel()
-                task = None
-        self._send_to_tft("ok")
-
-    def _set_temperature_autoreport(self, arg_s: int) -> None:
-        """Set the interval for temperature reports."""
-        self._set_autoreport_interval(self.temperature_report_task,
-                                      f"ok {TEMPERATURE_TEMPLATE}",
-                                      arg_s,
-                                      **self.printer_state)
-
-    def _set_position_autoreport(self, arg_s: int) -> None:
-        """Set the interval for position reports."""
-        self._set_autoreport_interval(self.position_report_task,
-                                      POSITION_TEMPLATE,
-                                      arg_s,
-                                      **self.printer_state)
-
-    def _set_print_status_autoreport(self, arg_s: int) -> None:
-        """Set the interval for print status reports."""
-        self._set_autoreport_interval(self.print_status_report_task,
-                                      PRINT_STATUS_TEMPLATE,
-                                      arg_s,
-                                      **self.printer_state)
-
     def _init_sd_card(self) -> None:
         """Initialize the SD card."""
         self._send_to_tft("SD card ok\nok")
@@ -756,12 +756,10 @@ class TFTAdapter:
 
         flist = self.file_manager.list_dir(path, simple_format=False)
         if flist:
-            response['files'] = [
-                (file['filename'], file['size']) for file in flist.get("files")
-            ]
-
-        marlin_response = Template(FILE_LIST_TEMPLATE).render(files=response['files'])
-        self._send_to_tft(marlin_response)
+            files = {
+                "files" : [(file['filename'], file['size']) for file in flist.get("files")]
+            }
+        self._report(FILE_LIST_TEMPLATE, **files)
 
     async def _delete_sd_file(self, arg_string: str = "") -> None:
         """Delete a file from the SD card."""
@@ -868,14 +866,11 @@ class TFTAdapter:
 
     def _handle_filament(self, args: Dict[str, Any]) -> None:
         """Handle filament loading and unloading."""
-        length = args.get("length")
-        extruder = args.get("extruder")
-        zmove = args.get("zmove")
         cmd = [
-            "G91",               # Relative Positioning
-            f"G92 E{extruder}",  # Reset Extruder
-            f"G1 Z{zmove} E{length} F{3*60}",  # Extrude or Retract
-            "G92 E0"              # Reset Extruder
+            "G91",                                                     # Relative Positioning
+            f"G92 E{args.get('extruder')}",                            # Reset Extruder
+            f"G1 Z{args.get('zmove')} E{args.get('length')} F{3*60}",  # Extrude or Retract
+            "G92 E0"                                                   # Reset Extruder
         ]
         self.queue_task(cmd)
 
