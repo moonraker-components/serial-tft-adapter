@@ -365,11 +365,6 @@ class TFTAdapter:
         self.firmware_name = "Marlin | Klipper " + printer_info['software_version']
         self.config: Dict[str, Any] = cfg_status.get('configfile', {}).get('config', {})
 
-        logging.info(
-            "TFT Config Received:\n"
-            "Firmware Name: %s\n"
-            "Printer Config: %s\n", self.firmware_name, self.config)
-
         # Make subscription request
         sub_args: Dict[str, Optional[List[str]]] = {
             "motion_report": None,
@@ -417,11 +412,9 @@ class TFTAdapter:
         """Process subscription changes."""
         filament_detected = None
         if data.get(self.filament_sensor):
-            logging.info(f"data: {data}")
             filament_detected = data[self.filament_sensor]["filament_detected"]
         print_stats = data.get('print_stats')
         if print_stats and print_stats.get('state'):
-            logging.info(f"data: {data}")
             state = print_stats["state"]
             if state == 'printing':
                 if self.last_printer_state == 'paused':
@@ -504,6 +497,7 @@ class TFTAdapter:
             self.queue.append((task[0], task[1]))
         else:
             self.queue.append(task)
+        logging.info(f"gq_busy: {self.gq_busy}")
         if not self.gq_busy:
             self.gq_busy = True
             self.event_loop.register_callback(self._process_queue)
