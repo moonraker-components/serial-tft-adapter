@@ -10,7 +10,11 @@ import time
 import logging
 import asyncio
 import re
+import serial
 from jinja2 import Template
+from ..utils import ServerError
+from ..utils import json_wrapper as jsonw
+
 from typing import (
     TYPE_CHECKING,
     Deque,
@@ -23,14 +27,11 @@ from typing import (
     Coroutine,
     Union,
 )
-import serial
-from ..utils import ServerError
-from ..utils import json_wrapper as jsonw
 
 # Annotation imports
 if TYPE_CHECKING:
+    from .power import PrinterPower
     from ..confighelper import ConfigHelper
-    from .klippy_connection import KlippyConnection
     from .klippy_apis import KlippyAPI as APIComp
     from .file_manager.file_manager import FileManager as FMComp
     FlexCallback = Callable[..., Optional[Coroutine]]
@@ -409,7 +410,8 @@ class TFTAdapter:
 
     def _process_klippy_shutdown(self) -> None:
         """Handle the event when Klippy shuts down."""
-        pass
+        power: PrinterPower = self.server.lookup_component("power")
+        power.set_device_power("printer", "off")
 
     def _process_klippy_disconnect(self) -> None:
         """Handle the event when Klippy disconnects."""
