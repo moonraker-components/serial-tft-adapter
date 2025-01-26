@@ -191,13 +191,16 @@ class SerialConnection:
         byte_resp = (message + "\n").encode("utf-8")
         self.serial.write(byte_resp)
 
+    def echo(self, message = None):
+        self._send_to_tft(f'echo:{message}')
+
     def error(self, error = None):
         self._send_to_tft(f'Error:{error}')
 
     def action(self, action = None):
         self._send_to_tft(f'//action:{action}')
 
-    def message(self, message = None):
+    def command(self, message = None):
         self._send_to_tft(f'{message}')
 
 class TFTAdapter:
@@ -414,7 +417,7 @@ class TFTAdapter:
     def _process_klippy_disconnect(self) -> None:
         """Handle the event when Klippy disconnects."""
         # Tell the TFT that the printer is "off"
-        self.ser_conn.message('Reset Software')
+        self.ser_conn.command('Reset Software')
         self.is_ready = False
         self.last_printer_state = 'O'
 
@@ -492,7 +495,7 @@ class TFTAdapter:
                 else:
                     response = await self.klippy_apis.run_gcode(script)
             logging.debug("response script %s: %s" % (scripts, response))
-            self.ser_conn.message(response)
+            self.ser_conn.command(response)
         except self.server.error:
             msg = f"Error executing script {script}"
             logging.exception(msg)
@@ -510,7 +513,7 @@ class TFTAdapter:
 
     def _report(self, template, **data):
         """Send report to tft."""
-        self.ser_conn.message(Template(template).render(**data))
+        self.ser_conn.command(Template(template).render(**data))
 
     async def _autoreport(self, template, interval, **data):
         """Send periodic reports based on the specified template."""
@@ -529,7 +532,7 @@ class TFTAdapter:
             if task:
                 task.cancel()
                 task = None
-        self.ser_conn.message("ok")
+        self.ser_conn.command("ok")
 
     def _set_temperature_autoreport(self, arg_s: int) -> None:
         """Set the interval for temperature reports."""
@@ -569,7 +572,7 @@ class TFTAdapter:
         elif response.startswith('File opened:') or \
              response.startswith('File selected') or \
              response.startswith('ok'):
-            self.ser_conn.message(response)
+            self.ser_conn.command(response)
         elif response.startswith('echo: Adjusted Print Time'):
             timeleft = response.split('echo: Adjusted Print Time')[-1].strip()
             hours, minutes = timeleft.split('hr')
@@ -597,7 +600,7 @@ class TFTAdapter:
             elif "Unknown command" in response:
                 self.ser_conn.error(response[3:])
             else:
-                self.ser_conn.message(response[3:])
+                self.ser_conn.command(response[3:])
         else:
             logging.info("Untreated response: %s", response)
 
@@ -688,13 +691,12 @@ class TFTAdapter:
     def _set_babystep(self, **args: Dict[float]) -> None:
         """Set the babystep offsets."""
         offsets = []
-        if 'arg_x' in args:
-            offsets.append(f"X={args['arg_x']}")
-        if 'arg_y' in args:
-            offsets.append(f"Y={args['arg_y']}")
-        if 'arg_z' in args:
-            offsets.append(f"Z={args['arg_z']}")
+        offsets.append(f"X_ADJUST={args['arg_x']}") if 'arg_x' in args else None
+        offsets.append(f"Y_ADJUST={args['arg_y']}") if 'arg_y' in args else None
+        offsets.append(f"Z_ADJUST={args['arg_z']}") if 'arg_z' in args else None
         offset_str = " ".join(offsets)
+        if 'xyz' in self.printer_state.get("toolhead").get("homed_axes"):
+            offset_str = f"{offset_str} MOVE=1 MOVE_SPEED=10"
         self.queue_task(f"SET_GCODE_OFFSET {offset_str}")
 
     def _pid_autotune(self, **args: Dict[float]) -> None:
@@ -714,7 +716,7 @@ class TFTAdapter:
                 self.queue_task("BED_MESH_PROFILE LOAD=default")
         else:
             # TODO: Falta implementar M420 V1 T1 y M420 Zx.xx
-            self.ser_conn.message("ok")
+            self.ser_conn.command("ok")
 
     def _power_off(self) -> None:
         """Power off printer."""
@@ -731,7 +733,7 @@ class TFTAdapter:
 
     def _init_sd_card(self) -> None:
         """Initialize the SD card."""
-        self.ser_conn.message("SD card ok\nok")
+        self.ser_conn.command("SD card ok\nok")
 
     def _list_sd_files(self, arg_string: Optional[str] = None) -> None:
         """List the files on the SD card."""
@@ -793,7 +795,7 @@ class TFTAdapter:
         if not filename.startswith("gcodes/"):
             filename = "gcodes/" + filename
 
-        self.ser_conn.message(f"{filename}\nok")
+        self.ser_conn.command(f"{filename}\nok")
 
     def _report_software_endstops(self) -> None:
         """Report the status of software endstops."""
@@ -807,19 +809,19 @@ class TFTAdapter:
 
     def _send_ok_response(self, **args: Dict[float]) -> None:
         """Send an 'ok' response."""
-        self.ser_conn.message("ok")
+        self.ser_conn.command("ok")
 
     def _serial_print(self,
                       arg_p: Optional[int] = None,
                       arg_a: Optional[int] = None,
                       arg_string: Optional[str] = None) -> None:
         """Send serial print message."""
-        self.ser_conn.message("ok")
+        self.ser_conn.command("ok")
         if arg_p == 0 and arg_string != "action:cancel":
             if arg_a == 1:
-                self.ser_conn.message(f"//{arg_string}")
+                self.ser_conn.command(f"//{arg_string}")
             else:
-                self.ser_conn.message(f"echo:{arg_string}\nok" if arg_string else "ok")
+                self.ser_conn.echo(f"{arg_string}\nok" if arg_string else "ok")
 
     def _set_acceleration(self, **args: Dict[float]) -> None:
         """Set the acceleration limits."""
@@ -836,20 +838,17 @@ class TFTAdapter:
     def _set_gcode_offset(self, **args: Dict[float]) -> None:
         """Set the G-code offsets."""
         offsets = []
-        if 'arg_x' in args:
-            offsets.append(f"X={args['arg_x']}")
-        if 'arg_y' in args:
-            offsets.append(f"Y={args['arg_y']}")
-        if 'arg_z' in args:
-            offsets.append(f"Z={args['arg_z']}")
+        offsets.append(f"X={args['arg_x']}") if 'arg_x' in args else None
+        offsets.append(f"Y={args['arg_y']}") if 'arg_y' in args else None
+        offsets.append(f"Z={args['arg_z']}") if 'arg_z' in args else None
         offset_str = " ".join(offsets)
         self.queue_task(f"SET_GCODE_OFFSET {offset_str}")
 
     def _set_probe_offset(self, **args: Dict[float]) -> None:
         """Set the probe offsets."""
         if not args:
-            self.ser_conn.message(PROBE_OFFSET_TEMPLATE, **(self.printer_state | self.config))
-        self.ser_conn.message("ok")
+            self.ser_conn.command(PROBE_OFFSET_TEMPLATE, **(self.printer_state | self.config))
+        self.ser_conn.command("ok")
 
     def _load_filament(self) -> None:
         """Load filament into the extruder."""
