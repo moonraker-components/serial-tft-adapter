@@ -138,8 +138,8 @@ class SerialConnection:
         self.port: str = config.get('serial')
         self.baud = config.getint('baud', 57600)
         self.partial_input: bytes = b""
-        self.ser: Optional[serial.Serial] = None
-        self.fd: Optional[int] = None
+        self.serial: Optional[serial.Serial] = None
+        self.file_descriptor: Optional[int] = None
         self.connected: bool = False
         self.send_busy: bool = False
         self.send_buffer: bytes = b""
@@ -148,13 +148,13 @@ class SerialConnection:
     def disconnect(self, reconnect: bool = False) -> None:
         """Disconnect the serial connection."""
         if self.connected:
-            if self.fd is not None:
-                self.event_loop.remove_reader(self.fd)
-                self.fd = None
+            if self.file_descriptor is not None:
+                self.event_loop.remove_reader(self.file_descriptor)
+                self.file_descriptor = None
             self.connected = False
-            if self.ser is not None:
-                self.ser.close()
-            self.ser = None
+            if self.serial is not None:
+                self.serial.close()
+            self.serial = None
             self.partial_input = b""
             self.send_buffer = b""
             self.tft.initialized = False
@@ -173,17 +173,17 @@ class SerialConnection:
                 break
             logging.info("Attempting to connect to: %s", self.port)
             try:
-                self.ser = serial.Serial(
+                self.serial = serial.Serial(
                     self.port, self.baud, timeout=0, exclusive=True)
             except (OSError, IOError, serial.SerialException):
                 logging.exception("Unable to open port: %s", self.port)
                 await asyncio.sleep(2.)
                 connect_time += time.time()
                 continue
-            self.fd = self.ser.fileno()
-            fd = self.fd = self.ser.fileno()
-            os.set_blocking(fd, False)
-            self.event_loop.add_reader(fd, self._handle_incoming)
+            self.file_descriptor = self.serial.fileno()
+            file_descriptor = self.file_descriptor = self.serial.fileno()
+            os.set_blocking(file_descriptor, False)
+            self.event_loop.add_reader(file_descriptor, self._handle_incoming)
             self.connected = True
             logging.info("TFT Connected")
         self.attempting_connect = False
@@ -191,10 +191,10 @@ class SerialConnection:
     def _handle_incoming(self) -> None:
         """Handle incoming data from the serial connection."""
         # Process incoming data using same method as gcode.py
-        if self.fd is None:
+        if self.file_descriptor is None:
             return
         try:
-            data = os.read(self.fd, 4096)
+            data = os.read(self.file_descriptor, 4096)
         except os.error:
             return
 
@@ -215,9 +215,25 @@ class SerialConnection:
                 self.tft.process_line(decoded_line)
             except ServerError:
                 logging.exception("GCode Processing Error: %s", decoded_line)
-                self._send_to_tft(error=f"!! GCode Processing Error: {decoded_line}")
+                self.error(f"!! GCode Processing Error: {decoded_line}")
             except Exception:
                 logging.exception("Error during gcode processing")
+
+    def _send_to_tft(self, message=None) -> None:
+        """Write a response to the serial connection."""
+        formatted_msg = message.replace('\n', '\\n')
+        logging.info("write: %s", formatted_msg)
+        byte_resp = (message + "\n").encode("utf-8")
+        self.serial.write(byte_resp)
+
+    def error(self, error = None):
+        self._send_to_tft(f'Error:{error}')
+
+    def action(self, action = None):
+        self._send_to_tft(f'//action:{action}')
+
+    def message(self, message = None):
+        self._send_to_tft(f'{message}')
 
 class TFTAdapter:
     """Adapter for managing the TFT display."""
@@ -389,21 +405,6 @@ class TFTAdapter:
             logging.exception("Unable to complete subscription request")
         self.is_shutdown = False
         self.is_ready = True
-    def _send_to_tft(self, message=None, command=None, action=None, error=None) -> None:
-        """Write a response to the serial connection."""
-        if command:
-            msg = f'{command}'
-        elif action:
-            msg = f'//action:{action}'
-        elif error:
-            msg = f'Error:{error}'
-        else:
-            msg = f'{message}'
-
-        formatted_msg = msg.replace('\n', '\\n')
-        logging.info("write: %s", formatted_msg)
-        byte_resp = (msg + "\n").encode("utf-8")
-        self.ser_conn.ser.write(byte_resp)
 
     def _subcription_updates(self, data: Dict[str, Any], _: float):
         """Update printer state values."""
@@ -424,21 +425,21 @@ class TFTAdapter:
             state = print_stats["state"]
             if state == 'printing':
                 if self.last_printer_state == 'paused':
-                    self._send_to_tft(action="resume")
+                    self.ser_conn.action("resume")
                     if filament_detected:
-                        self._send_to_tft(action="prompt_end")
-                        self._send_to_tft(action="prompt_begin Continue?")
-                        self._send_to_tft(action="prompt_button Ok")
-                        self._send_to_tft(action="prompt_show")
+                        self.ser_conn.action("prompt_end")
+                        self.ser_conn.action("prompt_begin Continue?")
+                        self.ser_conn.action("prompt_button Ok")
+                        self.ser_conn.action("prompt_show")
                 elif self.last_printer_state != 'printing':
-                    self._send_to_tft(action="print_start")
+                    self.ser_conn.action("print_start")
             elif state == 'paused':
                 if filament_detected is False:
-                    self._send_to_tft(action="paused filament_runout")
+                    self.ser_conn.action("paused filament_runout")
                 else:
-                    self._send_to_tft(action="paused")
+                    self.ser_conn.action("paused")
             elif state == 'cancelled':
-                self._send_to_tft(action="cancel")
+                self.ser_conn.action("cancel")
             self.last_printer_state = state
 
     def _process_klippy_shutdown(self) -> None:
@@ -448,7 +449,7 @@ class TFTAdapter:
     def _process_klippy_disconnect(self) -> None:
         """Handle the event when Klippy disconnects."""
         # Tell the TFT that the printer is "off"
-        self._send_to_tft('Reset Software')
+        self.ser_conn.message('Reset Software')
         self.last_printer_state = 'O'
         self.is_ready = False
         self.is_shutdown = self.is_shutdown = False
@@ -530,11 +531,11 @@ class TFTAdapter:
                 else:
                     response = await self.klippy_apis.run_gcode(script)
             logging.debug("response script %s: %s" % (scripts, response))
-            self._send_to_tft(response)
+            self.ser_conn.message(response)
         except self.server.error:
             msg = f"Error executing script {script}"
             logging.exception(msg)
-            self._send_to_tft(error=msg)
+            self.ser_conn.error(msg)
 
     async def _process_command(self, item: Tuple[FlexCallback, Any]) -> None:
         """Process a command task."""
@@ -548,7 +549,7 @@ class TFTAdapter:
 
     def _report(self, template, **data):
         """Send report to tft."""
-        self._send_to_tft(Template(template).render(**data))
+        self.ser_conn.message(Template(template).render(**data))
 
     async def _autoreport(self, template, interval, **data):
         """Send periodic reports based on the specified template."""
@@ -567,7 +568,7 @@ class TFTAdapter:
             if task:
                 task.cancel()
                 task = None
-        self._send_to_tft("ok")
+        self.ser_conn.message("ok")
 
     def _set_temperature_autoreport(self, arg_s: int) -> None:
         """Set the interval for temperature reports."""
@@ -601,19 +602,19 @@ class TFTAdapter:
         logging.debug("response: %s" % response)
         if "Klipper state" in response or response.startswith('!!'):
             if "not hot enough" in response:
-                self._send_to_tft(error=response[3:])
+                self.ser_conn.error(response[3:])
             else:
                 logging.error("response: %s" % response)
         elif response.startswith('File opened:') or \
              response.startswith('File selected') or \
              response.startswith('ok'):
-            self._send_to_tft(response)
+            self.ser_conn.message(response)
         elif response.startswith('echo: Adjusted Print Time'):
             timeleft = response.split('echo: Adjusted Print Time')[-1].strip()
             hours, minutes = timeleft.split('hr')
             minutes = minutes.strip().replace('min', '')
             formatted_timeleft = f"{hours}h{minutes}m00s"
-            self._send_to_tft(action=f"notification Time Left {formatted_timeleft}")
+            self.ser_conn.action(f"notification Time Left {formatted_timeleft}")
         elif response.startswith('//'):
             if "prompt_text" in response or \
                "prompt_begin" in response or \
@@ -633,9 +634,9 @@ class TFTAdapter:
                 }
                 self._report(f"PROBE_ACCURACY_TEMPLATE\nok", **data)
             elif "Unknown command" in response:
-                self._send_to_tft(error=response[3:])
+                self.ser_conn.error(response[3:])
             else:
-                self._send_to_tft(response[3:])
+                self.ser_conn.message(response[3:])
         else:
             logging.info("Untreated response: %s", response)
 
@@ -671,7 +672,7 @@ class TFTAdapter:
         elif sd_state in ("standby", "cancelled"):
             self.queue_task(f"SDCARD_PRINT_FILE FILENAME=\"{self.current_file}\"")
         else:
-            self._send_to_tft(error="Cannot start printing, printer is not in a stopped state")
+            self.ser_conn.error("Cannot start printing, printer is not in a stopped state")
 
     def _pause_print(self, arg_p: int) -> None:
         """Pause the current print."""
@@ -680,7 +681,7 @@ class TFTAdapter:
         if sd_state == "printing":
             self.queue_task("PAUSE")
         else:
-            self._send_to_tft(error="Cannot pause, printer is not printing")
+            self.ser_conn.error("Cannot pause, printer is not printing")
 
     def _probe_command(self, arg_p: int, arg_s: int) -> None:
         """Handle probe commands."""
@@ -752,7 +753,7 @@ class TFTAdapter:
                 self.queue_task("BED_MESH_PROFILE LOAD=default")
         else:
             # TODO: Falta implementar M420 V1 T1 y M420 Zx.xx
-            self._send_to_tft("ok")
+            self.ser_conn.message("ok")
 
     def _power_off(self) -> None:
         """Power off printer."""
@@ -769,7 +770,7 @@ class TFTAdapter:
 
     def _init_sd_card(self) -> None:
         """Initialize the SD card."""
-        self._send_to_tft("SD card ok\nok")
+        self.ser_conn.message("SD card ok\nok")
 
     def _list_sd_files(self, arg_string: Optional[str] = None) -> None:
         """List the files on the SD card."""
@@ -820,7 +821,7 @@ class TFTAdapter:
         """Get the full path of a file."""
         filename: Optional[str] = arg_string
         if filename is None:
-            self._send_to_tft(error="Missing filename\nok")
+            self.ser_conn.error("Missing filename\nok")
             return
 
         # Clean up the filename
@@ -831,7 +832,7 @@ class TFTAdapter:
         if not filename.startswith("gcodes/"):
             filename = "gcodes/" + filename
 
-        self._send_to_tft(f"{filename}\nok")
+        self.ser_conn.message(f"{filename}\nok")
 
     def _report_software_endstops(self) -> None:
         """Report the status of software endstops."""
@@ -845,19 +846,19 @@ class TFTAdapter:
 
     def _send_ok_response(self, **args: Dict[float]) -> None:
         """Send an 'ok' response."""
-        self._send_to_tft("ok")
+        self.ser_conn.message("ok")
 
     def _serial_print(self,
                       arg_p: Optional[int] = None,
                       arg_a: Optional[int] = None,
                       arg_string: Optional[str] = None) -> None:
         """Send serial print message."""
-        self._send_to_tft("ok")
+        self.ser_conn.message("ok")
         if arg_p == 0 and arg_string != "action:cancel":
             if arg_a == 1:
-                self._send_to_tft(f"//{arg_string}")
+                self.ser_conn.message(f"//{arg_string}")
             else:
-                self._send_to_tft(f"echo:{arg_string}\nok" if arg_string else "ok")
+                self.ser_conn.message(f"echo:{arg_string}\nok" if arg_string else "ok")
 
     def _set_acceleration(self, **args: Dict[float]) -> None:
         """Set the acceleration limits."""
@@ -886,8 +887,8 @@ class TFTAdapter:
     def _set_probe_offset(self, **args: Dict[float]) -> None:
         """Set the probe offsets."""
         if not args:
-            self._send_to_tft(PROBE_OFFSET_TEMPLATE, **(self.printer_state | self.config))
-        self._send_to_tft("ok")
+            self.ser_conn.message(PROBE_OFFSET_TEMPLATE, **(self.printer_state | self.config))
+        self.ser_conn.message("ok")
 
     def _load_filament(self) -> None:
         """Load filament into the extruder."""
@@ -961,7 +962,7 @@ class TFTAdapter:
         """Apply the Z offset from the probe."""
         sd_state = self.printer_state.get("print_stats", {}).get("state", "standby")
         if sd_state in ("printing", "paused"):
-            self._send_to_tft(error="Not saved - Printing")
+            self.ser_conn.error("Not saved - Printing")
         else:
             self.queue_task(["Z_OFFSET_APPLY_PROBE", "SAVE_CONFIG"])
 
@@ -969,7 +970,7 @@ class TFTAdapter:
         """Restore settings from file."""
         sd_state = self.printer_state.get("print_stats", {}).get("state", "standby")
         if sd_state in ("printing", "paused"):
-            self._send_to_tft(error="Not saved - Printing")
+            self.ser_conn.error("Not saved - Printing")
         else:
             self.queue_task("RESTART")
 
