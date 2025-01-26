@@ -157,7 +157,6 @@ class SerialConnection:
             self.serial = None
             self.partial_input = b""
             self.send_buffer = b""
-            self.tft.initialized = False
             logging.info("TFT Disconnected")
         if reconnect and not self.attempting_connect:
             self.attempting_connect = True
@@ -260,9 +259,6 @@ class TFTAdapter:
         self.extruder_count: int = 0
         self.heaters: List[str] = []
         self.is_ready: bool = False
-        self.is_shutdown: bool = False
-        self.initialized: bool = False
-        self.gq_busy: bool = True
         self.queue: List[Union[str, Tuple[FlexCallback, Any]]] = []
         self.last_printer_state: str = 'O'
         self.last_update_time: float = 0.
@@ -395,11 +391,9 @@ class TFTAdapter:
             self.printer_state = await self.klippy_apis.query_objects(sub_args)
             self._actions(self.printer_state)
             await self.klippy_apis.subscribe_objects(sub_args, self._subcription_updates)
-            self.gq_busy = False
+            self.is_ready = True
         except self.server.error:
             logging.exception("Unable to complete subscription request")
-        self.is_shutdown = False
-        self.is_ready = True
 
     def _subcription_updates(self, data: Dict[str, Any], _: float):
         """Update printer state values."""
@@ -437,15 +431,14 @@ class TFTAdapter:
 
     def _process_klippy_shutdown(self) -> None:
         """Handle the event when Klippy shuts down."""
-        self.is_shutdown = True
+        pass
 
     def _process_klippy_disconnect(self) -> None:
         """Handle the event when Klippy disconnects."""
         # Tell the TFT that the printer is "off"
         self.ser_conn.message('Reset Software')
-        self.last_printer_state = 'O'
         self.is_ready = False
-        self.is_shutdown = self.is_shutdown = False
+        self.last_printer_state = 'O'
 
     def process_line(self, line: str) -> None:
         """Process an incoming line of G-code."""
@@ -497,21 +490,17 @@ class TFTAdapter:
             self.queue.append((task[0], task[1]))
         else:
             self.queue.append(task)
-        logging.info(f"gq_busy: {self.gq_busy}")
-        if not self.gq_busy:
-            self.gq_busy = True
+        if self.is_ready:
             self.event_loop.register_callback(self._process_queue)
 
     async def _process_queue(self) -> None:
         """Process the queued tasks."""
-        self.gq_busy = True
         while self.queue:
             item = self.queue.pop(0)
             if isinstance(item, str) or isinstance(item, list):
                 await self._process_script(item)
             else:
                 await self._process_command(item)
-        self.gq_busy = False
 
     async def _process_script(self, scripts: str) -> None:
         """Process a script task."""
