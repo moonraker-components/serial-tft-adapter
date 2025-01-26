@@ -178,43 +178,11 @@ class SerialConnection:
                 connect_time += time.time()
                 continue
             self.file_descriptor = self.serial.fileno()
-            file_descriptor = self.file_descriptor = self.serial.fileno()
-            os.set_blocking(file_descriptor, False)
-            self.event_loop.add_reader(file_descriptor, self._handle_incoming)
+            os.set_blocking(self.file_descriptor, False)
+            self.event_loop.add_reader(self.file_descriptor, self.tft._handle_incoming)
             self.connected = True
             logging.info("TFT Connected")
         self.attempting_connect = False
-
-    def _handle_incoming(self) -> None:
-        """Handle incoming data from the serial connection."""
-        # Process incoming data using same method as gcode.py
-        if self.file_descriptor is None:
-            return
-        try:
-            data = os.read(self.file_descriptor, 4096)
-        except os.error:
-            return
-
-        if not data:
-            # possibly an error, disconnect
-            self.disconnect(reconnect=True)
-            logging.info("serial_display: No data received, disconnecting")
-            return
-
-        # Remove null bytes, separate into lines
-        data = data.strip(b'\x00')
-        lines = data.split(b'\n')
-        lines[0] = self.partial_input + lines[0]
-        self.partial_input = lines.pop()
-        for line in lines:
-            try:
-                decoded_line = line.strip().decode('utf-8', 'ignore')
-                self.tft.process_line(decoded_line)
-            except ServerError:
-                logging.exception("GCode Processing Error: %s", decoded_line)
-                self.error(f"!! GCode Processing Error: {decoded_line}")
-            except Exception:
-                logging.exception("Error during gcode processing")
 
     def _send_to_tft(self, message=None) -> None:
         """Write a response to the serial connection."""
@@ -312,6 +280,36 @@ class TFTAdapter:
         self.standard_gcodes: List[str] = [
             'G0', 'G1', 'G28', 'G90', 'G92', 'M84', 'M104', 'M106', 'M140'
         ]
+
+    def _handle_incoming(self) -> None:
+        """Handle incoming data from the serial connection."""
+        if self.ser_conn.file_descriptor is None:
+            return
+        try:
+            data = os.read(self.ser_conn.file_descriptor, 4096)
+        except os.error:
+            return
+
+        if not data:
+            # possibly an error, disconnect
+            self.ser_conn.disconnect(reconnect=True)
+            logging.info("serial_display: No data received, disconnecting")
+            return
+
+        # Remove null bytes, separate into lines
+        data = data.strip(b'\x00')
+        lines = data.split(b'\n')
+        lines[0] = self.ser_conn.partial_input + lines[0]
+        self.ser_conn.partial_input = lines.pop()
+        for line in lines:
+            try:
+                decoded_line = line.strip().decode('utf-8', 'ignore')
+                self.process_line(decoded_line)
+            except ServerError:
+                logging.exception("GCode Processing Error: %s", decoded_line)
+                self.ser_conn.error(f"!! GCode Processing Error: {decoded_line}")
+            except Exception:
+                logging.exception("Error during gcode processing")
 
     def _register_server_events(self) -> None:
         """Register server event handlers."""
