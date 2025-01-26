@@ -355,16 +355,13 @@ class TFTAdapter:
 
         # Make subscription request
         sub_args: Dict[str, Optional[List[str]]] = {
-            "motion_report": None,
             "gcode_move": None,
             "toolhead": None,
             "virtual_sdcard": None,
             "fan": None,
             "extruder": None,
             "heater_bed": None,
-            "display_status": None,
             "print_stats": None,
-            "idle_timeout": None,
             "probe": None,
             f"{self.filament_sensor}": None
         }
