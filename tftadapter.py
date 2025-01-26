@@ -141,8 +141,6 @@ class SerialConnection:
         self.serial: Optional[serial.Serial] = None
         self.file_descriptor: Optional[int] = None
         self.connected: bool = False
-        self.send_busy: bool = False
-        self.send_buffer: bytes = b""
         self.attempting_connect: bool = True
 
     def disconnect(self, reconnect: bool = False) -> None:
@@ -156,7 +154,6 @@ class SerialConnection:
                 self.serial.close()
             self.serial = None
             self.partial_input = b""
-            self.send_buffer = b""
             logging.info("TFT Disconnected")
         if reconnect and not self.attempting_connect:
             self.attempting_connect = True
@@ -244,11 +241,9 @@ class TFTAdapter:
         self.file_manager: FMComp = self.server.lookup_component('file_manager')
         self.klippy_apis: APIComp = self.server.lookup_component('klippy_apis')
         self.machine_name = config.get('machine_name', "Klipper")
-        self.firmware_name: str = "Klipper"
+        self.firmware_name: str = None
         self.filament_sensor: str = f"filament_switch_sensor {config.get('filament_sensor_name')}"
-        self.last_message: Optional[str] = None
-        self.current_file: str = ""
-        self.file_metadata: Dict[str, Any] = {}
+        self.selected_file: str = ""
         self.temperature_report_task: Optional[asyncio.Task] = None
         self.position_report_task: Optional[asyncio.Task] = None
         self.print_status_report_task: Optional[asyncio.Task] = None
@@ -256,12 +251,9 @@ class TFTAdapter:
         # Initialize tracked state.
         self.printer_state: Dict[str, Dict[str, Any]] = {}
         self.config = {}
-        self.extruder_count: int = 0
-        self.heaters: List[str] = []
         self.is_ready: bool = False
         self.queue: List[Union[str, Tuple[FlexCallback, Any]]] = []
         self.last_printer_state: str = 'O'
-        self.last_update_time: float = 0.
 
         self.ser_conn = SerialConnection(config, self)
         logging.info("TFT Configured")
@@ -368,25 +360,14 @@ class TFTAdapter:
             "toolhead": None,
             "virtual_sdcard": None,
             "fan": None,
+            "extruder": None,
+            "heater_bed": None,
             "display_status": None,
             "print_stats": None,
             "idle_timeout": None,
             "probe": None,
             f"{self.filament_sensor}": None
         }
-        self.extruder_count = 0
-        self.heaters = []
-        extruders = []
-        for cfg in self.config:
-            if cfg.startswith("extruder"):
-                self.extruder_count += 1
-                extruders.append(cfg)
-                sub_args[cfg] = None
-            elif cfg == "heater_bed":
-                self.heaters.append(cfg)
-                sub_args[cfg] = None
-        extruders.sort()
-        self.heaters.extend(extruders)
         try:
             self.printer_state = await self.klippy_apis.query_objects(sub_args)
             self._actions(self.printer_state)
@@ -644,8 +625,8 @@ class TFTAdapter:
 
     def _select_sd_file(self, arg_string: str) -> None:
         """Select an SD file for printing."""
-        self.current_file = self._clean_filename(arg_string)
-        self.queue_task(f"M23 {self.current_file}")
+        self.selected_file = self._clean_filename(arg_string)
+        self.queue_task(f"M23 {self.selected_file}")
 
     def _start_print(self) -> None:
         """Start printing the selected file."""
@@ -653,7 +634,7 @@ class TFTAdapter:
         if sd_state == "paused":
             self.queue_task("RESUME")
         elif sd_state in ("standby", "cancelled"):
-            self.queue_task(f"SDCARD_PRINT_FILE FILENAME=\"{self.current_file}\"")
+            self.queue_task(f"SDCARD_PRINT_FILE FILENAME=\"{self.selected_file}\"")
         else:
             self.ser_conn.error("Cannot start printing, printer is not in a stopped state")
 
