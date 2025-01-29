@@ -452,24 +452,23 @@ class TFTAdapter:
                 metadata = self.file_manager.get_file_metadata(filename)
                 logging.info(f"metadata: {metadata}")
                 estimated_time = metadata.get("estimated_time")
+                if estimated_time:
+                    hours = int(estimated_time // 3600)
+                    minutes = int((estimated_time % 3600) // 60)
+                    seconds = int(estimated_time % 60)
+                    self.ser_conn.notification(f"Time Left {hours:02}h{minutes:02}m{seconds:02}s")
                 layer_count = metadata.get("layer_count")
-                hours = int(estimated_time // 3600)
-                minutes = int((estimated_time % 3600) // 60)
-                seconds = int(estimated_time % 60)
-                self.ser_conn.notification(f"Time Left {hours:02}h{minutes:02}m{seconds:02}s")
-
-                self._queue_task(
-                    f"SET_PRINT_STATS_INFO CURRENT_LAYER=1 TOTAL_LAYER={layer_count}")
-                self._report(f"{PRINT_STATUS_TEMPLATE}", **self.values)
+                if layer_count:
+                    self._queue_task(
+                        f"SET_PRINT_STATS_INFO CURRENT_LAYER=1 TOTAL_LAYER={layer_count}")
+                    self._report(f"{PRINT_STATUS_TEMPLATE}", **self.values)
         elif state == "paused":
-            if filament_detected is False:
-                self.ser_conn.action("paused filament_runout")
-            else:
-                self.ser_conn.action("paused")
-        elif state == "cancelled":
-            self.ser_conn.action("cancel")
-        elif state == "complete":
-            self.ser_conn.action("print_end")
+            self.ser_conn.action("paused" if filament_detected else "paused filament_runout")
+        if state in ("cancelled","complete"):
+            self.ser_conn.action("cancel" if state == "cancelled" else "print_end")
+            if self.print_status_report_task:
+                self.print_status_report_task.cancel()
+                self.print_status_report_task = None
         self.last_printer_state = state
 
     def _process_klippy_shutdown(self) -> None:
