@@ -1,8 +1,8 @@
-# TFT display adapter component for moonraker
-#
-# Copyright (C) 2020  Hugo Araya Nash <kabroxiko@gmail.com>
-#
-# This file may be distributed under the terms of the GNU GPLv3 license.
+"""Moonraker component for managing TFT display communication.
+
+This module provides an adapter for interfacing with TFT displays,
+handling serial communication, command processing, and status reporting.
+"""
 
 from __future__ import annotations
 import os
@@ -10,13 +10,8 @@ import time
 import logging
 import asyncio
 import re
-import serial
-from jinja2 import Template
-from ..utils import ServerError
-
 from typing import (
     TYPE_CHECKING,
-    Deque,
     Any,
     Tuple,
     Optional,
@@ -26,6 +21,14 @@ from typing import (
     Coroutine,
     Union,
 )
+try:
+    import serial
+    from jinja2 import Template
+except ImportError:
+    logging.error("Missing required dependencies: pyserial and/or jinja2")
+    raise
+
+from ..utils import ServerError  # Changed to absolute import
 
 # Annotation imports
 if TYPE_CHECKING:
@@ -134,20 +137,22 @@ PROBE_ACCURACY_TEMPLATE = (
 class SerialConnection:
     """Manages the serial connection to the TFT."""
 
-    def __init__(self,
-                 config: ConfigHelper,
-                 tft: TFTAdapter
-                 ) -> None:
-        """Initialize the serial connection."""
+    def __init__(self, config: ConfigHelper, tft: TFTAdapter) -> None:
+        """Initialize the serial connection.
+
+        Args:
+            config: Configuration helper instance
+            tft: TFT adapter instance
+        """
         self.event_loop = config.get_server().get_event_loop()
         self.tft = tft
-        self.port: str = config.get('serial')
-        self.baud = config.getint('baud', 57600)
-        self.partial_input: bytes = b""
+        self.port: str = config.get("serial")
+        self.baud = config.getint("baud", 57600)
         self.serial: Optional[serial.Serial] = None
         self.file_descriptor: Optional[int] = None
         self.connected: bool = False
         self.attempting_connect: bool = True
+        self.partial_input: bytes = b""
 
     def disconnect(self, reconnect: bool = False) -> None:
         """Disconnect the serial connection."""
@@ -191,106 +196,132 @@ class SerialConnection:
 
     def _send_to_tft(self, message=None) -> None:
         """Write a response to the serial connection."""
-        formatted_msg = message.replace('\n', '\\n')
+        formatted_msg = message.replace("\n", "\\n")
         logging.info("write: %s", formatted_msg)
         byte_resp = (message + "\n").encode("utf-8")
         self.serial.write(byte_resp)
 
-    def echo(self, message = None):
-        self._send_to_tft(f'echo:{message}')
+    def echo(self, message: str) -> None:
+        """Send echo message to TFT."""
+        self._send_to_tft(f"echo:{message}")
 
-    def command(self, command = None):
-        self._send_to_tft(f'{command}')
+    def command(self, command: str) -> None:
+        """Send command to TFT."""
+        self._send_to_tft(command)
 
-    def error(self, error = None):
-        self._send_to_tft(f'Error:{error}')
+    def error(self, error: str) -> None:
+        """Send error message to TFT."""
+        self._send_to_tft(f"Error:{error}")
 
-    def action(self, action = None):
-        self._send_to_tft(f'//action:{action}')
+    def action(self, action: str) -> None:
+        """Send action command to TFT."""
+        self._send_to_tft(f"//action:{action}")
 
-    def notification(self, notification = None):
-        self.action(f'notification {notification}')
+    def notification(self, notification: str) -> None:
+        """Send notification to TFT."""
+        self.action(f"notification {notification}")
 
 class TFTAdapter:
     """Adapter for managing the TFT display."""
 
     def __init__(self, config: ConfigHelper) -> None:
-        """Initialize the TFT adapter."""
-        self.server = config.get_server()
-        self.event_loop = self.server.get_event_loop()
-        self.file_manager: FMComp = self.server.lookup_component('file_manager')
-        self.klippy_apis: APIComp = self.server.lookup_component('klippy_apis')
-        self.machine_name = config.get('machine_name', "Klipper")
-        self.firmware_name: str = None
+        """Initialize the TFT adapter.
+
+        Args:
+            config: Configuration helper instance
+        """
+        self.values: Dict[str, Dict[str, Any]] = {}
+        self.config: Dict[str, Any] = {}
+        self.firmware_name: Optional[str] = None
+        self.is_ready: bool = False
+        self.is_busy: bool = False
+        self.queue: List[Union[str, Tuple[FlexCallback, Any]]] = []
+        self.last_printer_state: str = "O"
+        self.machine_name = config.get("machine_name", "Klipper")
         self.filament_sensor: str = f"filament_switch_sensor {config.get('filament_sensor_name')}"
+
+        # Tasks for periodic reporting
         self.temperature_report_task: Optional[asyncio.Task] = None
         self.position_report_task: Optional[asyncio.Task] = None
         self.print_status_report_task: Optional[asyncio.Task] = None
 
-        # Initialize tracked state.
-        self.values: Dict[str, Dict[str, Any]] = {}
-        self.config = {}
-        self.is_ready: bool = False
-        self.is_busy: bool = True
-        self.queue: List[Union[str, Tuple[FlexCallback, Any]]] = []
-        self.last_printer_state: str = 'O'
-
-        self.ser_conn = SerialConnection(config, self)
-        logging.info("TFT Configured")
-
-        # Register server events
+        self._init_components(config)
         self._register_server_events()
+        self._init_command_handlers()
+
+    def _init_components(self, config: ConfigHelper) -> None:
+        """Initialize component dependencies."""
+        self.server = config.get_server()
+        self.event_loop = self.server.get_event_loop()
+        self.file_manager: FMComp = self.server.lookup_component("file_manager")
+        self.klippy_apis: APIComp = self.server.lookup_component("klippy_apis")
+        self.ser_conn = SerialConnection(config, self)
+
+    def _register_server_events(self) -> None:
+        """Register server event handlers."""
+        self.server.register_event_handler(
+            "server:klippy_ready", self._process_klippy_ready)
+        self.server.register_event_handler(
+            "server:klippy_shutdown", self._process_klippy_shutdown)
+        self.server.register_event_handler(
+            "server:klippy_disconnect", self._process_klippy_disconnect)
+        self.server.register_event_handler(
+            "server:gcode_response", self.handle_gcode_response)
+
+    def _init_command_handlers(self):
+        # Initialize tracked state.
+        logging.info("TFT Configured")
 
         # These commands are directly executued on the server and do not to
         # make a request to Klippy
         self.direct_gcodes: Dict[str, FlexCallback] = {
-            'G26': self._send_ok_response, # Mesh Validation Pattern (G26 H240 B70 R99)
-            'G29': self._send_ok_response, # Bed leveling (G29)
-            'G30': self._probe_at_position, # Single Z-Probe (G30 E1 X28 Y207)
-            'M20': self._list_sd_files,
-            'M21': self._init_sd_card,
-            'M23': self._select_sd_file,
-            'M24': self._start_print,
-            'M25': self._pause_print,
-            'M27': self._set_print_status_autoreport,
-            'M33': self._get_long_path,
-            'M48': "PROBE_ACCURACY",
-            'M81': self._power_off,
-            'M82': self._send_ok_response, # E Absolute
-            'M92': self._send_ok_response, # Set Axis Steps-per-unit
-            'M105': self._report_temperature,
-            'M108': "CANCEL_PRINT",        # Break and Continue
-            'M114': self._report_position,
-            'M115': self._report_firmware_info,
-            'M118': self._serial_print,
-            'M150': self._set_led,
-            'M154': self._set_position_autoreport,
-            'M155': self._set_temperature_autoreport,
-            'M201': self._set_acceleration,
-            'M203': self._set_velocity,
-            'M206': self._set_gcode_offset,
-            'M211': self._report_software_endstops,
-            'M220': self._set_feed_rate,
-            'M221': self._set_flow_rate,
-            'M280': self._probe_command,
-            'M290': self._set_babystep,
-            'M303': self._pid_autotune,
-            'M401': "BLTOUCH_DEBUG COMMAND=self_test",
-            'M420': self._set_bed_leveling,
-            'M500': self._z_offset_apply_probe,
-            'M501': self._restore_settings,
-            'M502': self._restore_settings,
-            'M503': self._report_settings,
-            'M524': "CANCEL_PRINT",
-            'M701': self._load_filament,
-            'M702': self._unload_filament,
-            'M851': self._set_probe_offset,
-            'M876': self._send_ok_response, # Handle Prompt Response
-            'T0': self._send_ok_response,   # Select or Report Tool
+            "G26": self._send_ok_response, # Mesh Validation Pattern (G26 H240 B70 R99)
+            "G29": self._send_ok_response, # Bed leveling (G29)
+            "G30": self._probe_at_position, # Single Z-Probe (G30 E1 X28 Y207)
+            "M20": self._list_sd_files,
+            "M21": self._init_sd_card,
+            "M23": self._select_sd_file,
+            "M24": self._start_print,
+            "M25": self._pause_print,
+            "M27": self._set_print_status_autoreport,
+            "M33": self._get_long_path,
+            "M48": "PROBE_ACCURACY",
+            "M81": self._power_off,
+            "M82": self._send_ok_response, # E Absolute
+            "M92": self._send_ok_response, # Set Axis Steps-per-unit
+            "M105": self._report_temperature,
+            "M108": "CANCEL_PRINT",        # Break and Continue
+            "M114": self._report_position,
+            "M115": self._report_firmware_info,
+            "M118": self._serial_print,
+            "M150": self._set_led,
+            "M154": self._set_position_autoreport,
+            "M155": self._set_temperature_autoreport,
+            "M201": self._set_acceleration,
+            "M203": self._set_velocity,
+            "M206": self._set_gcode_offset,
+            "M211": self._report_software_endstops,
+            "M220": self._set_feed_rate,
+            "M221": self._set_flow_rate,
+            "M280": self._probe_command,
+            "M290": self._set_babystep,
+            "M303": self._pid_autotune,
+            "M401": "BLTOUCH_DEBUG COMMAND=self_test",
+            "M420": self._set_bed_leveling,
+            "M500": self._z_offset_apply_probe,
+            "M501": self._restore_settings,
+            "M502": self._restore_settings,
+            "M503": self._report_settings,
+            "M524": "CANCEL_PRINT",
+            "M701": self._load_filament,
+            "M702": self._unload_filament,
+            "M851": self._set_probe_offset,
+            "M876": self._send_ok_response, # Handle Prompt Response
+            "T0": self._send_ok_response,   # Select or Report Tool
         }
 
         self.standard_gcodes: List[str] = [
-            'G0', 'G1', 'G28', 'G90', 'G91', 'G92', 'M84', 'M104', 'M106', 'M140'
+            "G0", "G1", "G28", "G90", "G91", "G92", "M84", "M104", "M106", "M140"
         ]
 
     def _handle_incoming(self) -> None:
@@ -309,30 +340,19 @@ class TFTAdapter:
             return
 
         # Remove null bytes, separate into lines
-        data = data.strip(b'\x00')
-        lines = data.split(b'\n')
+        data = data.strip(b"\x00")
+        lines = data.split(b"\n")
         lines[0] = self.ser_conn.partial_input + lines[0]
         self.ser_conn.partial_input = lines.pop()
         for line in lines:
             try:
-                decoded_line = line.strip().decode('utf-8', 'ignore')
+                decoded_line = line.strip().decode("utf-8", "ignore")
                 self.process_line(decoded_line)
             except ServerError:
                 logging.exception("GCode Processing Error: %s", decoded_line)
                 self.ser_conn.error(f"!! GCode Processing Error: {decoded_line}")
             except Exception:
                 logging.exception("Error during gcode processing")
-
-    def _register_server_events(self) -> None:
-        """Register server event handlers."""
-        self.server.register_event_handler(
-            "server:klippy_ready", self._process_klippy_ready)
-        self.server.register_event_handler(
-            "server:klippy_shutdown", self._process_klippy_shutdown)
-        self.server.register_event_handler(
-            "server:klippy_disconnect", self._process_klippy_disconnect)
-        self.server.register_event_handler(
-            "server:gcode_response", self.handle_gcode_response)
 
     async def component_init(self) -> None:
         """Initialize the component."""
@@ -347,7 +367,7 @@ class TFTAdapter:
         while retries:
             try:
                 printer_info = await self.klippy_apis.get_klippy_info()
-                cfg_status = await self.klippy_apis.query_objects({'configfile': None})
+                cfg_status = await self.klippy_apis.query_objects({"configfile": None})
             except self.server.error:
                 logging.exception("TFT initialization request failed")
                 retries -= 1
@@ -357,8 +377,8 @@ class TFTAdapter:
                 continue
             break
 
-        self.firmware_name = "Marlin | Klipper " + printer_info['software_version']
-        self.config: Dict[str, Any] = cfg_status.get('configfile', {}).get('config', {})
+        self.firmware_name = "Marlin | Klipper " + printer_info["software_version"]
+        self.config: Dict[str, Any] = cfg_status.get("configfile", {}).get("config", {})
 
         # Make subscription request
         sub_args: Dict[str, Optional[List[str]]] = {
@@ -375,7 +395,7 @@ class TFTAdapter:
         }
         try:
             self.values = await self.klippy_apis.query_objects(sub_args)
-            self._print_status_change(self.values.get('print_stats', {}).get('state'), None)
+            self._print_status_change(self.values.get("print_stats", {}).get("state"), None)
             await self.klippy_apis.subscribe_objects(sub_args, self._subcription_updates)
             self.is_ready = True
             self.is_busy = False
@@ -388,7 +408,7 @@ class TFTAdapter:
             if key in self.values:
                 self.values[key].update(values)
         filament_sensor = data.get(self.filament_sensor)
-        state = data.get('print_stats', {}).get('state')
+        state = data.get("print_stats", {}).get("state")
         if state:
             self._print_status_change(state, filament_sensor)
         display_status: Optional[int] = data.get("display_status")
@@ -396,28 +416,28 @@ class TFTAdapter:
             self._display_status_change(display_status)
 
     def _display_status_change(self, display_status: Dict[str, Any]) -> None:
+        """Process display status changes."""
         message = display_status.get("message")
-        if message:
-            if re.match('^\d+/\d+ | ET ', message):
-                layers, _ = message.split('|')
-                current_layer, total_layer = layers.split('/')
-                self.queue_task(
-                    f"SET_PRINT_STATS_INFO CURRENT_LAYER={current_layer} TOTAL_LAYER={total_layer}")
-            elif re.match('^ET ', message):
-                pass
-            else:
-                self.ser_conn.notification(message)
+        if not message:
+            return
+
+        if re.match(r"^\d+/\d+ | ET ", message):
+            current_layer, total_layer = re.search(r"(^\d+)/(\d+) | ET ", message).groups()
+            self._queue_task(
+                f"SET_PRINT_STATS_INFO CURRENT_LAYER={current_layer} TOTAL_LAYER={total_layer}")
+        elif not message.startswith("ET "):
+            self.ser_conn.notification(message)
 
     def _print_status_change(self,
                              state: Dict[str, Any],
                              filament_sensor: Dict[str, Any]) -> None:
         """Process subscription changes."""
-        logging.info(f"self.last_printer_state: {self.last_printer_state}")
+        logging.debug("Current printer state: %s", self.last_printer_state)
         filament_detected = None
         if filament_sensor:
             filament_detected = filament_sensor["filament_detected"]
-        if state == 'printing':
-            if self.last_printer_state == 'paused':
+        if state == "printing":
+            if self.last_printer_state == "paused":
                 self.ser_conn.action("resume")
                 if filament_detected:
                     self.ser_conn.action("prompt_end")
@@ -437,15 +457,15 @@ class TFTAdapter:
                 seconds = int(estimated_time % 60)
                 self.ser_conn.notification(f"Time Left {hours:02}h{minutes:02}m{seconds:02}s")
 
-                self.queue_task(
+                self._queue_task(
                     f"SET_PRINT_STATS_INFO CURRENT_LAYER=1 TOTAL_LAYER={layer_count}")
                 self._report(f"{PRINT_STATUS_TEMPLATE}", **self.values)
-        elif state == 'paused':
+        elif state == "paused":
             if filament_detected is False:
                 self.ser_conn.action("paused filament_runout")
             else:
                 self.ser_conn.action("paused")
-        elif state == 'cancelled':
+        elif state == "cancelled":
             self.ser_conn.action("cancel")
         self.last_printer_state = state
 
@@ -457,9 +477,9 @@ class TFTAdapter:
     def _process_klippy_disconnect(self) -> None:
         """Handle the event when Klippy disconnects."""
         # Tell the TFT that the printer is "off"
-        self.ser_conn.command('Reset Software')
+        self.ser_conn.command("Reset Software")
         self.is_ready = False
-        self.last_printer_state = 'O'
+        self.last_printer_state = "O"
 
     def process_line(self, line: str) -> None:
         """Process an incoming line of G-code."""
@@ -473,36 +493,36 @@ class TFTAdapter:
         gcode = parts[0].strip()
 
         if gcode in self.standard_gcodes:
-            self.queue_task(line)
+            self._queue_task(line)
 
         elif gcode in self.direct_gcodes:
             if isinstance(self.direct_gcodes[gcode], str):
-                self.queue_task(self.direct_gcodes[gcode])
+                self._queue_task(self.direct_gcodes[gcode])
                 return
             params: Dict[str, Any] = {}
             for part in parts[1:]:
                 logging.debug("part: %s", part)
-                if not re.match(r'^-?\d+(?:\.\d+)?$', part[1:]):
+                if not re.match(r"^-?\d+(?:\.\d+)?$", part[1:]):
                     if not params.get("arg_string"):
                         params["arg_string"] = part
                     else:
-                        params["arg_string"] = f'{params["arg_string"]} {part}'
+                        params["arg_string"] = f"{params['arg_string']} {part}"
                     continue
                 else:
                     arg = part[0].lower()
-                    val = int(part[1:]) if re.match(r'^-?\d+$', part[1:]) else float(part[1:])
+                    val = int(part[1:]) if re.match(r"^-?\d+$", part[1:]) else float(part[1:])
                     params[f"arg_{arg}"] = val
             logging.debug("params: %s", params)
             func = self.direct_gcodes[gcode]
-            self.queue_task((func, params))
+            self._queue_task((func, params))
             return
         else:
             logging.warning("Unregistered command: %s", line)
-            self.queue_task(line)
+            self._queue_task(line)
 
-    def queue_task(self, task: Union[str, List[str], Tuple[FlexCallback, Any]]) -> None:
+    def _queue_task(self, task: Union[str, List[str], Tuple[FlexCallback, Any]]) -> None:
         """Queue a task for execution."""
-        if isinstance(task, str) or isinstance(task, list):
+        if isinstance(task, (str, list)):
             self.queue.append(task)
         elif isinstance(task, tuple) and len(task) == 2:
             self.queue.append((task[0], task[1]))
@@ -517,12 +537,10 @@ class TFTAdapter:
         self.is_busy = True
         while self.queue:
             item = self.queue.pop(0)
-            if isinstance(item, str) or isinstance(item, list):
-                logging.debug(f"processing: {item}")
+            logging.debug("Processing: %s", repr(item))
+            if isinstance(item, (str, list)):
                 await self._process_script(item)
             else:
-                cmd, args = item
-                logging.debug(f"processing: {str(cmd)} {args}")
                 await self._process_command(item)
         self.is_busy = False
 
@@ -551,8 +569,34 @@ class TFTAdapter:
             ret = cmd(**args)
             if ret is not None:
                 await ret
-        except Exception:
-            logging.exception("Error processing command")
+        except (ValueError, TypeError) as e:
+            logging.exception("Error processing command: %s", str(e))
+        except Exception as e:
+            logging.exception("Unexpected error processing command: %s", str(e))
+
+    def handle_gcode_response(self, response: str) -> None:
+        """Handle the response from a G-code command."""
+        if "// Sending" in response or ("B:" in response and "T0:" in response):
+            return
+        logging.debug("Received gcode response: %s", response)
+        if "Klipper state" in response or response.startswith("!!"):
+            if "not hot enough" in response:
+                self.ser_conn.error(response[3:])
+            else:
+                logging.error("Error response: %s", response)
+                return
+        if response.startswith(("File opened:", "File selected", "ok")):
+            self.ser_conn.command(response)
+        elif response.startswith(("echo: Adjusted Print Time", "echo: ")):
+            if re.match(r"^echo: \d+/\d+ | ET ", response):
+                return
+        elif response.startswith("// probe at "):
+            match = re.search(r"probe at ([\d.-]+),([\d.-]+) is z=([\d.-]+)", response)
+            if match:
+                x, y, z = match.groups()
+                self.ser_conn.command(f"Bed X:{x} Y:{y} Z:{z}")
+        else:
+            logging.debug("Unhandled response: %s", response)
 
     def _report(self, template, **data):
         """Send report to tft."""
@@ -592,56 +636,6 @@ class TFTAdapter:
                                       arg_s,
                                       **self.values)
 
-    def handle_gcode_response(self, response: str) -> None:
-        """Handle the response from a G-code command."""
-        # TODO
-        # Untreated response: echo: Restoring "extruder" temperature to 200.0°C,
-        #                           this may take some time
-        if "// Sending" in response or ("B:" in response and "T0:" in response):
-            return
-        logging.info("response: %s" % response)
-        if "Klipper state" in response or response.startswith('!!'):
-            if "not hot enough" in response:
-                self.ser_conn.error(response[3:])
-            else:
-                logging.error("response: %s" % response)
-        elif response.startswith('File opened:') or \
-             response.startswith('File selected') or \
-             response.startswith('ok'):
-            self.ser_conn.command(response)
-        elif response.startswith('echo: Adjusted Print Time') or \
-             re.match("^echo: \d+/\d+ | ET ", response):
-            pass
-        elif response.startswith('// probe at '):   # // probe at 28.000,207.000 is z=1.660000
-            match = re.search(r"probe at ([\d\.-]+),([\d\.-]+) is z=([\d\.-]+)", response)
-            if match:
-                x, y, z = match.groups()
-                self.ser_conn.command(f"Bed X:{x} Y:{y} Z:{z}")
-        elif response.startswith('//'):
-            if "prompt_text" in response or \
-               "prompt_begin" in response or \
-               "prompt_footer_button" in response or \
-               "prompt_show" in response:
-                logging.error("response: %s" % response)
-            elif "probe: open" in response:
-                self._report(f"PROBE_TEST_TEMPLATE\nok", **self.values)
-            elif "probe accuracy results:" in response:
-                parts = response[3:].split(',')
-                data = {
-                    "max_val": parts[0].split()[-1],
-                    "min_val": parts[1].split()[-1],
-                    "range_val": parts[2].split()[-1],
-                    "avg_val": parts[3].split()[-1],
-                    "stddev_val": parts[5].split()[-1]
-                }
-                self._report(f"PROBE_ACCURACY_TEMPLATE\nok", **data)
-            elif "Unknown command" in response:
-                self.ser_conn.error(response[3:])
-            else:
-                self.ser_conn.command(response[3:])
-        else:
-            logging.info("Untreated response: %s", response)
-
     def _clean_filename(self, filename: str) -> str:
         """Clean up the filename by removing unnecessary parts."""
         # Remove quotes and whitespace
@@ -664,25 +658,25 @@ class TFTAdapter:
     def _select_sd_file(self, arg_string: str) -> None:
         """Select an SD file for printing."""
         self.values["print_stats"]["filename"] = self._clean_filename(arg_string)
-        self.queue_task(f"M23 {self._clean_filename(arg_string)}")
+        self._queue_task(f"M23 {self._clean_filename(arg_string)}")
 
     def _start_print(self) -> None:
         """Start printing the selected file."""
         selected_file = self.values["print_stats"]["filename"]
         sd_state = self.values.get("print_stats", {}).get("state", "standby")
         if sd_state == "paused":
-            self.queue_task("RESUME")
+            self._queue_task("RESUME")
         elif sd_state in ("standby", "cancelled"):
-            self.queue_task(f"SDCARD_PRINT_FILE FILENAME=\"{selected_file}\"")
+            self._queue_task(f"SDCARD_PRINT_FILE FILENAME=\"{selected_file}\"")
         else:
             self.ser_conn.error("Cannot start printing, printer is not in a stopped state")
 
-    def _pause_print(self, arg_p: int) -> None:
+    def _pause_print(self, **_: Any) -> None:
         """Pause the current print."""
         # TODO: handle P1
         sd_state = self.values.get("print_stats", {}).get("state", "standby")
         if sd_state == "printing":
-            self.queue_task("PAUSE")
+            self._queue_task("PAUSE")
         else:
             self.ser_conn.error("Cannot pause, printer is not printing")
 
@@ -691,54 +685,64 @@ class TFTAdapter:
         filename = self._clean_filename(args[0])
         # Escape existing double quotes in the file name
         filename = filename.replace("\"", "\\\"")
-        self.queue_task(f"SDCARD_PRINT_FILE FILENAME=\"{filename}\"")
+        self._queue_task(f"SDCARD_PRINT_FILE FILENAME=\"{filename}\"")
 
     def _set_led(self, **args: Dict[int]) -> None:
         """Set the LED color and brightness."""
-        red = args.get('arg_r', 0) / 255
-        green = args.get('arg_u', 0) / 255
-        blue = args.get('arg_b', 0) / 255
-        white = args.get('arg_w', 0) / 255
-        brightness = args.get('arg_p', 255) / 255
-        cmd = (f"SET_LED LED=statusled "
-               f"RED={red * brightness:.3f} "
-               f"GREEN={green * brightness:.3f} "
-               f"BLUE={blue * brightness:.3f} "
-               f"WHITE={white * brightness:.3f} "
-               "TRANSMIT=1 SYNC=1")
-        self.queue_task(cmd)
+        # TODO: read led name from config
+        red = args.get("arg_r", 0) / 255
+        green = args.get("arg_u", 0) / 255
+        blue = args.get("arg_b", 0) / 255
+        white = args.get("arg_w", 0) / 255
+        brightness = args.get("arg_p", 255) / 255
+        self._queue_task(f"SET_LED LED=statusled "
+                         f"RED={red * brightness:.3f} "
+                         f"GREEN={green * brightness:.3f} "
+                         f"BLUE={blue * brightness:.3f} "
+                         f"WHITE={white * brightness:.3f} "
+                         "TRANSMIT=1 SYNC=1")
 
     def _set_babystep(self, **args: Dict[float]) -> None:
         """Set the babystep offsets."""
         offsets = []
-        offsets.append(f"X_ADJUST={args['arg_x']}") if 'arg_x' in args else None
-        offsets.append(f"Y_ADJUST={args['arg_y']}") if 'arg_y' in args else None
-        offsets.append(f"Z_ADJUST={args['arg_z']}") if 'arg_z' in args else None
+        if "arg_x" in args:
+            offsets.append(f"X_ADJUST={args['arg_x']}")
+        if "arg_y" in args:
+            offsets.append(f"Y_ADJUST={args['arg_y']}")
+        if "arg_z" in args:
+            offsets.append(f"Z_ADJUST={args['arg_z']}")
         offset_str = " ".join(offsets)
-        if 'xyz' in self.values.get("toolhead").get("homed_axes"):
+        if "xyz" in self.values.get("toolhead").get("homed_axes"):
             offset_str = f"{offset_str} MOVE=1 MOVE_SPEED=10"
-        self.queue_task(f"SET_GCODE_OFFSET {offset_str}")
+        self._queue_task(f"SET_GCODE_OFFSET {offset_str}")
 
-    def _pid_autotune(self, **args: Dict[float]) -> None:
+    def _pid_autotune(self,
+                      arg_e: Optional[int] = None,
+                      arg_s: Optional[int] = None,
+                      arg_u: Optional[int] = None,
+                      **args: Dict[float]) -> None:
         """Initiates a process to determine the PID values."""
-        heater = "heater_bed" if args.get("arg_e") == -1 else "extruder"
-        cmd = f"PID_CALIBRATE HEATER={heater} TARGET={args.get('arg_s')}"
-        if args.get("arg_u") == 1:
+        heater = "heater_bed" if arg_e == -1 else "extruder"
+        cmd = f"PID_CALIBRATE HEATER={heater} TARGET={arg_s}"
+        if arg_u == 1:
             cmd = [cmd, "SAVE_CONFIG"]
-        self.queue_task(cmd)
+        self._queue_task(cmd)
 
-    def _set_bed_leveling(self, **args) -> None:
+    def _set_bed_leveling(self,
+                          arg_s: Optional[int] = None,
+                          arg_z: Optional[int] = None,
+                          **_: Any) -> None:
         """Set the bed leveling state."""
-        if args.get('arg_s'):
-            if args.get('arg_s') == 0:
-                self.queue_task("BED_MESH_CLEAR")
+        if arg_s:
+            if arg_s == 0:
+                self._queue_task("BED_MESH_CLEAR")
             else:
-                self.queue_task("BED_MESH_PROFILE LOAD=default")
-        elif args.get('arg_z'):
+                self._queue_task("BED_MESH_PROFILE LOAD=default")
+        elif arg_z:
             # TODO: Not working
-            self.queue_task([
+            self._queue_task([
                 "BED_MESH_PROFILE LOAD=default",
-                f"BED_MESH_OFFSET ZFADE={args.get('arg_z')}"])
+                f"BED_MESH_OFFSET ZFADE={arg_z}"])
         else:
             # TODO: Falta implementar M420 V1 T1
             self.ser_conn.command("ok")
@@ -754,13 +758,13 @@ class TFTAdapter:
             "M221 S100", # Reset Extruder flow rate override percentage to default (100%)
             "M84"
         ]
-        self.queue_task(cmd)
+        self._queue_task(cmd)
 
     def _init_sd_card(self) -> None:
         """Initialize the SD card."""
         self.ser_conn.command("SD card ok\nok")
 
-    def _list_sd_files(self, arg_string: Optional[str] = None) -> None:
+    def _list_sd_files(self, **_: Any) -> None:
         """List the files on the SD card."""
         response_type = 2
         if response_type != 2:
@@ -769,27 +773,27 @@ class TFTAdapter:
         path = "/"
 
         # Strip quotes if they exist
-        path = path.strip('\"')
+        path = path.strip("\"")
 
         # Path should come in as "0:/macros, or 0:/<gcode_folder>".  With
         # repetier compatibility enabled, the default folder is root,
         # ie. "0:/"
         if path.startswith("0:/"):
             path = path[2:]
-        response: Dict[str, Any] = {'dir': path}
-        response['files'] = []
+        response: Dict[str, Any] = {"dir": path}
+        response["files"] = []
 
         if path == "/":
-            response['dir'] = "/gcodes"
+            response["dir"] = "/gcodes"
             path = "gcodes"
         elif path.startswith("/gcodes"):
             path = path[1:]
 
+        files = {"files": []}
         flist = self.file_manager.list_dir(path, simple_format=False)
         if flist:
-            files = {
-                "files" : [(file['filename'], file['size']) for file in flist.get("files")]
-            }
+            files["files"] = [(file["filename"], file["size"])
+                            for file in flist.get("files", [])]
         self._report(FILE_LIST_TEMPLATE, **files)
 
     def _get_long_path(self, arg_string: str) -> None:
@@ -802,15 +806,15 @@ class TFTAdapter:
         state = { "state": "On" if filament_sensor.get("enabled", False) else "Off"}
         self._report(f"{SOFTWARE_ENDSTOPS_TEMPLATE}\nok", **state)
         logging.info(f"state: {self.values.get('print_stats', {}).get('state')}")
-        self._print_status_change(self.values.get('print_stats', {}).get('state'), None)
+        self._print_status_change(self.values.get("print_stats", {}).get("state"), None)
 
-    def _report_settings(self, arg_s: Optional[str] = None) -> None:
+    def _report_settings(self, **_: Any) -> None:
         """Report the printer settings."""
         self._report(f"{REPORT_SETTINGS_TEMPLATE}\nok", **(
             self.values | {"config":self.config}))
 
-    def _send_ok_response(self, **args: Dict[float]) -> None:
-        """Send an 'ok' response."""
+    def _send_ok_response(self, **_: Any) -> None:
+        """Send an "ok" response."""
         self.ser_conn.command("ok")
 
     def _serial_print(self,
@@ -825,26 +829,33 @@ class TFTAdapter:
             else:
                 self.ser_conn.echo(f"{arg_string}\nok" if arg_string else "ok")
 
-    def _set_acceleration(self, **args: Dict[float]) -> None:
+    def _set_acceleration(self,
+                          arg_x: Optional[float] = None,
+                          arg_y: Optional[float] = None,
+                          **_: Any) -> None:
         """Set the acceleration limits."""
-        acceleration = args.get("arg_x") or args.get("arg_y")
-        cmd = f"SET_VELOCITY_LIMIT ACCEL={acceleration} ACCEL_TO_DECEL={acceleration / 2}"
-        self.queue_task(cmd)
+        self._queue_task(
+            f"SET_VELOCITY_LIMIT ACCEL={arg_x or arg_x} ACCEL_TO_DECEL={(arg_x or arg_x) / 2}"
+        )
 
-    def _set_velocity(self, **args: Dict[float]) -> None:
+    def _set_velocity(self,
+                      arg_x: Optional[float] = None,
+                      arg_y: Optional[float] = None,
+                      **_: Any) -> None:
         """Set the velocity limits."""
-        velocity = args.get("arg_x") or args.get("arg_y")
-        cmd = f"SET_VELOCITY_LIMIT VELOCITY={velocity}"
-        self.queue_task(cmd)
+        self._queue_task(f"SET_VELOCITY_LIMIT VELOCITY={arg_x or arg_y}")
 
     def _set_gcode_offset(self, **args: Dict[float]) -> None:
         """Set the G-code offsets."""
         offsets = []
-        offsets.append(f"X={args['arg_x']}") if 'arg_x' in args else None
-        offsets.append(f"Y={args['arg_y']}") if 'arg_y' in args else None
-        offsets.append(f"Z={args['arg_z']}") if 'arg_z' in args else None
+        if "arg_x" in args:
+            offsets.append(f"X={args['arg_x']}")
+        if "arg_y" in args:
+            offsets.append(f"Y={args['arg_y']}")
+        if "arg_z" in args:
+            offsets.append(f"Z={args['arg_z']}")
         offset_str = " ".join(offsets)
-        self.queue_task(f"SET_GCODE_OFFSET {offset_str}")
+        self._queue_task(f"SET_GCODE_OFFSET {offset_str}")
 
     def _set_probe_offset(self, **args: Dict[float]) -> None:
         """Set the probe offsets."""
@@ -878,7 +889,7 @@ class TFTAdapter:
             f"G1 Z{args.get('zmove')} E{args.get('length')} F{3*60}",  # Extrude or Retract
             "G92 E0"                                                   # Reset Extruder
         ]
-        self.queue_task(cmd)
+        self._queue_task(cmd)
 
     def close(self) -> None:
         """Close the TFT adapter and disconnect."""
@@ -890,17 +901,17 @@ class TFTAdapter:
         if self.print_status_report_task:
             self.print_status_report_task.cancel()
 
-    def _set_feed_rate(self, arg_s: Optional[int] = None, arg_d: Optional[int] = None) -> None:
+    def _set_feed_rate(self, arg_s: Optional[int] = None, **_: Any) -> None:
         """Set the feed rate."""
         if arg_s is not None:
-            self.queue_task(f"M220 S{arg_s}")
+            self._queue_task(f"M220 S{arg_s}")
         else:
             self._report(f"{FEED_RATE_TEMPLATE}\nok", **self.values)
 
-    def _set_flow_rate(self, arg_s: Optional[int] = None, arg_d: Optional[int] = None) -> None:
+    def _set_flow_rate(self, arg_s: Optional[int] = None, **_: Any) -> None:
         """Set the flow rate."""
         if arg_s is not None:
-            self.queue_task(f"M221 S{arg_s}")
+            self._queue_task(f"M221 S{arg_s}")
         else:
             self._report(f"{FLOW_RATE_TEMPLATE}\nok", **self.values)
 
@@ -925,7 +936,7 @@ class TFTAdapter:
         if sd_state in ("printing", "paused"):
             self.ser_conn.error("Not saved - Printing")
         else:
-            self.queue_task(["Z_OFFSET_APPLY_PROBE", "SAVE_CONFIG"])
+            self._queue_task(["Z_OFFSET_APPLY_PROBE", "SAVE_CONFIG"])
 
     def _restore_settings(self) -> List[str]:
         """Restore settings from file."""
@@ -933,9 +944,9 @@ class TFTAdapter:
         if sd_state in ("printing", "paused"):
             self.ser_conn.error("Not saved - Printing")
         else:
-            self.queue_task("RESTART")
+            self._queue_task("RESTART")
 
-    def _probe_command(self, arg_p: int, arg_s: int) -> None:
+    def _probe_command(self, arg_s: int, **_: Any) -> None:
         """Handle probe commands."""
         if arg_s == 120:  # Test
             cmd = "QUERY_PROBE"
@@ -946,16 +957,16 @@ class TFTAdapter:
             else:
                 value = {10: "1", 90: "0", 160: "0"}.get(arg_s)
                 cmd = f"SET_PIN PIN=_probe_enable VALUE={value}"
-        self.queue_task(cmd)
+        self._queue_task(cmd)
 
-    def _probe_at_position(self, arg_e: int, arg_x: int, arg_y: int) -> None:
+    def _probe_at_position(self, arg_x: int, arg_y: int, **_: Any) -> None:
         """Handle probe commands."""
         cmd = [
             f"G1 X{arg_x} Y{arg_y}",
             "PROBE",
             "G1 Z10"
         ]
-        self.queue_task(cmd)
+        self._queue_task(cmd)
 
 def load_component(config: ConfigHelper) -> TFTAdapter:
     """Load the TFT adapter component."""

@@ -30,6 +30,7 @@ This project provides an adapter for integrating TFT displays with Klipper firmw
     origin: https://github.com/moonraker-components/serial-tft-adapter.git
     managed_services: moonraker
     ```
+
 5. Enable klipper restart with TFT push button:
     ```ini
     [gcode_button LCD_BUTTON_PRESS]
