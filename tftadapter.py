@@ -387,6 +387,7 @@ class TFTAdapter:
             "virtual_sdcard": None,
             "fan": None,
             "extruder": None,
+            "bed_mesh": None,
             "heater_bed": None,
             "display_status": None,
             "print_stats": None,
@@ -731,22 +732,33 @@ class TFTAdapter:
         self._queue_task(cmd)
 
     def _set_bed_leveling(self,
-                          arg_s: Optional[int] = None,
-                          arg_z: Optional[int] = None,
-                          **_: Any) -> None:
+                          **args: Dict[int]) -> None:
         """Set the bed leveling state."""
-        if arg_s:
-            if arg_s == 0:
+        if args.get("arg_s"):
+            if args.get("arg_s") == 0:
                 self._queue_task("BED_MESH_CLEAR")
             else:
                 self._queue_task("BED_MESH_PROFILE LOAD=default")
-        elif arg_z:
+        elif args.get("arg_z"):
             # TODO: Not working
             self._queue_task([
                 "BED_MESH_PROFILE LOAD=default",
-                f"BED_MESH_OFFSET ZFADE={arg_z}"])
+                f"BED_MESH_OFFSET ZFADE={args['arg_z']}"])
+        elif args.get("arg_v") == 1 and args.get("arg_t") == 1:
+            mesh = self.values["bed_mesh"]
+            points = mesh.get("profiles").get("default").get("points")
+            logging.debug("mesh: %s", self.values["bed_mesh"])
+            self.ser_conn.command("Bilinear Leveling Grid:\n"
+                "----- 0------ 1------ 2------ 3------ 4\n"
+                f"0 {points[0][0]} {points[0][1]} {points[0][2]} {points[0][3]} {points[0][4]}\n"
+                f"1 {points[1][0]} {points[1][1]} {points[1][2]} {points[1][3]} {points[1][4]}\n"
+                f"2 {points[2][0]} {points[2][1]} {points[2][2]} {points[2][3]} {points[2][4]}\n"
+                f"3 {points[3][0]} {points[3][1]} {points[3][2]} {points[3][3]} {points[3][4]}\n"
+                f"4 {points[4][0]} {points[4][1]} {points[4][2]} {points[4][3]} {points[4][4]}\n"
+                # "X:198.00 Y:220.00 Z:10.74 E:0.00 Count X:15840 Y:17600 Z:16800\n"
+                )
         else:
-            # TODO: Falta implementar M420 V1 T1
+            # TODO: Falta implementar M420 sin parametros
             self.ser_conn.command("ok")
 
     def _power_off(self) -> None:
