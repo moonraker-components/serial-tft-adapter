@@ -467,6 +467,8 @@ class TFTAdapter:
                 self.ser_conn.action("paused")
         elif state == "cancelled":
             self.ser_conn.action("cancel")
+        elif state == "complete":
+            self.ser_conn.action("print_end")
         self.last_printer_state = state
 
     def _process_klippy_shutdown(self) -> None:
