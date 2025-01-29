@@ -43,28 +43,32 @@ PRINT_STATUS_TEMPLATE = (
 )
 
 TEMPERATURE_TEMPLATE = (
-    "T:{{ extruder.temperature | round(2) }} /{{ extruder.target | round(2) }} "
-    "B:{{ heater_bed.temperature | round(2) }} /{{ heater_bed.target | round(2) }} "
+    "T:{{ extruder.temperature | int }} /{{ extruder.target | int }} "
+    "B:{{ heater_bed.temperature | int }} /{{ heater_bed.target | int }} "
     "@:0 B@:0"
 )
 
 PROBE_OFFSET_TEMPLATE = (
-    "M851 X{{ bltouch.x_offset | float - gcode_move.homing_origin[0] }} "
-    "Y{{ bltouch.y_offset | float - gcode_move.homing_origin[1] }} "
-    "Z{{ bltouch.z_offset | float - gcode_move.homing_origin[2] }}"
+    "M851 X{{ config.bltouch.x_offset | float - gcode_move.homing_origin[0] }} "
+    "Y{{ config.bltouch.y_offset | float - gcode_move.homing_origin[1] }} "
+    "Z{{ config.bltouch.z_offset | float - gcode_move.homing_origin[2] }}"
 )
 
 REPORT_SETTINGS_TEMPLATE = (
     "M203 X{{ toolhead.max_velocity }} Y{{ toolhead.max_velocity }} "
-    "Z{{ printer.max_z_velocity }} E{{ extruder.max_extrude_only_velocity }}\n"
+    "Z{{ config.printer.max_z_velocity }} E{{ extruder.max_extrude_only_velocity }}\n"
     "M201 X{{ toolhead.max_accel }} Y{{ toolhead.max_accel }} "
-    "Z{{ printer.max_z_accel }} E{{ extruder.max_extrude_only_accel }}\n"
+    "Z{{ config.printer.max_z_accel }} E{{ extruder.max_extrude_only_accel }}\n"
     "M206 X{{ gcode_move.homing_origin[0] }} "
          "Y{{ gcode_move.homing_origin[1] }} "
          "Z{{ gcode_move.homing_origin[2] }}\n"
     f"{PROBE_OFFSET_TEMPLATE}\n"
-    "M420 S1 Z{{ bed_mesh.fade_end }}\n"
-    "M106 S{{ fan.speed * 255 | round(0) }}"
+    "M420 S1 Z{{ config.bed_mesh.fade_end }}\n"
+    "M106 S{{ fan.speed * 255 | int }}\n"
+    "work:{min:{x:0,y:0,z:0},"
+          "max:{x:{{ config.stepper_x.position_max }},"
+               "y:{{ config.stepper_y.position_max }},"
+               "z:{{ config.stepper_z.position_max }}}}"
 )
 
 FIRMWARE_INFO_TEMPLATE = (
@@ -227,6 +231,7 @@ class TFTAdapter:
         self.values: Dict[str, Dict[str, Any]] = {}
         self.config = {}
         self.is_ready: bool = False
+        self.is_busy: bool = True
         self.queue: List[Union[str, Tuple[FlexCallback, Any]]] = []
         self.last_printer_state: str = 'O'
 
@@ -241,7 +246,7 @@ class TFTAdapter:
         self.direct_gcodes: Dict[str, FlexCallback] = {
             'G26': self._send_ok_response, # Mesh Validation Pattern (G26 H240 B70 R99)
             'G29': self._send_ok_response, # Bed leveling (G29)
-            'G30': self._send_ok_response, # Single Z-Probe (G30 E1 X28 Y207)
+            'G30': self._probe_at_position, # Single Z-Probe (G30 E1 X28 Y207)
             'M20': self._list_sd_files,
             'M21': self._init_sd_card,
             'M23': self._select_sd_file,
@@ -270,6 +275,7 @@ class TFTAdapter:
             'M280': self._probe_command,
             'M290': self._set_babystep,
             'M303': self._pid_autotune,
+            'M401': "BLTOUCH_DEBUG COMMAND=self_test",
             'M420': self._set_bed_leveling,
             'M500': self._z_offset_apply_probe,
             'M501': self._restore_settings,
@@ -284,7 +290,7 @@ class TFTAdapter:
         }
 
         self.standard_gcodes: List[str] = [
-            'G0', 'G1', 'G28', 'G90', 'G92', 'M84', 'M104', 'M106', 'M140'
+            'G0', 'G1', 'G28', 'G90', 'G91', 'G92', 'M84', 'M104', 'M106', 'M140'
         ]
 
     def _handle_incoming(self) -> None:
@@ -372,6 +378,7 @@ class TFTAdapter:
             self._print_status_change(self.values.get('print_stats', {}).get('state'), None)
             await self.klippy_apis.subscribe_objects(sub_args, self._subcription_updates)
             self.is_ready = True
+            self.is_busy = False
         except self.server.error:
             logging.exception("Unable to complete subscription request")
 
@@ -390,9 +397,7 @@ class TFTAdapter:
 
     def _display_status_change(self, display_status: Dict[str, Any]) -> None:
         message = display_status.get("message")
-        progress = display_status.get("progress")
         if message:
-            logging.info(f"display_message: {message}")
             if re.match('^\d+/\d+ | ET ', message):
                 layers, _ = message.split('|')
                 current_layer, total_layer = layers.split('/')
@@ -402,8 +407,6 @@ class TFTAdapter:
                 pass
             else:
                 self.ser_conn.notification(message)
-        if progress:
-            logging.info(f"progress: {progress}")
 
     def _print_status_change(self,
                              state: Dict[str, Any],
@@ -487,10 +490,7 @@ class TFTAdapter:
                     continue
                 else:
                     arg = part[0].lower()
-                    if re.match(r'^-?\d+$', part[1:]):
-                        val = int(part[1:])
-                    else:
-                        val = float(part[1:])
+                    val = int(part[1:]) if re.match(r'^-?\d+$', part[1:]) else float(part[1:])
                     params[f"arg_{arg}"] = val
             logging.debug("params: %s", params)
             func = self.direct_gcodes[gcode]
@@ -508,17 +508,23 @@ class TFTAdapter:
             self.queue.append((task[0], task[1]))
         else:
             self.queue.append(task)
-        if self.is_ready:
+        if self.is_ready and not self.is_busy:
+            self.is_busy = True
             self.event_loop.register_callback(self._process_queue)
 
     async def _process_queue(self) -> None:
         """Process the queued tasks."""
+        self.is_busy = True
         while self.queue:
             item = self.queue.pop(0)
             if isinstance(item, str) or isinstance(item, list):
+                logging.debug(f"processing: {item}")
                 await self._process_script(item)
             else:
+                cmd, args = item
+                logging.debug(f"processing: {str(cmd)} {args}")
                 await self._process_command(item)
+        self.is_busy = False
 
     async def _process_script(self, scripts: str) -> None:
         """Process a script task."""
@@ -559,14 +565,10 @@ class TFTAdapter:
             await asyncio.sleep(interval)
 
     def _set_autoreport_interval(self, task, template, interval, **data) -> None:
+        if task:
+            task.done()
         if interval > 0:
-            if task:
-                task.cancel()
-            task = self.event_loop.create_task( self._autoreport(template, interval, **data))
-        else:
-            if task:
-                task.cancel()
-                task = None
+            task = self.event_loop.create_task(self._autoreport(template, interval, **data))
         self.ser_conn.command("ok")
 
     def _set_temperature_autoreport(self, arg_s: int) -> None:
@@ -610,6 +612,11 @@ class TFTAdapter:
         elif response.startswith('echo: Adjusted Print Time') or \
              re.match("^echo: \d+/\d+ | ET ", response):
             pass
+        elif response.startswith('// probe at '):   # // probe at 28.000,207.000 is z=1.660000
+            match = re.search(r"probe at ([\d\.-]+),([\d\.-]+) is z=([\d\.-]+)", response)
+            if match:
+                x, y, z = match.groups()
+                self.ser_conn.command(f"Bed X:{x} Y:{y} Z:{z}")
         elif response.startswith('//'):
             if "prompt_text" in response or \
                "prompt_begin" in response or \
@@ -679,19 +686,6 @@ class TFTAdapter:
         else:
             self.ser_conn.error("Cannot pause, printer is not printing")
 
-    def _probe_command(self, arg_p: int, arg_s: int) -> None:
-        """Handle probe commands."""
-        if arg_s == 120:  # Test
-            cmd = "QUERY_PROBE"
-        else:
-            if self.config.get("bltouch"):
-                value = {10: "pin_down", 90: "pin_up", 160: "reset"}.get(arg_s)
-                cmd = f"BLTOUCH_DEBUG COMMAND={value}"
-            else:
-                value = {10: "1", 90: "0", 160: "0"}.get(arg_s)
-                cmd = f"SET_PIN PIN=_probe_enable VALUE={value}"
-        self.queue_task(cmd)
-
     def _print_file(self, args: List[str]) -> None:
         """Print the specified file."""
         filename = self._clean_filename(args[0])
@@ -740,8 +734,13 @@ class TFTAdapter:
                 self.queue_task("BED_MESH_CLEAR")
             else:
                 self.queue_task("BED_MESH_PROFILE LOAD=default")
+        elif args.get('arg_z'):
+            # TODO: Not working
+            self.queue_task([
+                "BED_MESH_PROFILE LOAD=default",
+                f"BED_MESH_OFFSET ZFADE={args.get('arg_z')}"])
         else:
-            # TODO: Falta implementar M420 V1 T1 y M420 Zx.xx
+            # TODO: Falta implementar M420 V1 T1
             self.ser_conn.command("ok")
 
     def _power_off(self) -> None:
@@ -808,10 +807,7 @@ class TFTAdapter:
     def _report_settings(self, arg_s: Optional[str] = None) -> None:
         """Report the printer settings."""
         self._report(f"{REPORT_SETTINGS_TEMPLATE}\nok", **(
-            self.values |
-            { "printer": self.config.get("printer"),
-              "bltouch": self.config.get("bltouch"),
-              "bed_mesh": self.config.get("bed_mesh")}))
+            self.values | {"config":self.config}))
 
     def _send_ok_response(self, **args: Dict[float]) -> None:
         """Send an 'ok' response."""
@@ -853,8 +849,7 @@ class TFTAdapter:
     def _set_probe_offset(self, **args: Dict[float]) -> None:
         """Set the probe offsets."""
         if not args:
-            self.ser_conn.command(PROBE_OFFSET_TEMPLATE, **(
-                self.values | {"bltouch": self.config.get("bltouch")}))
+            self._report(PROBE_OFFSET_TEMPLATE, **(self.values | {"config":self.config}))
         self.ser_conn.command("ok")
 
     def _load_filament(self) -> None:
@@ -939,6 +934,28 @@ class TFTAdapter:
             self.ser_conn.error("Not saved - Printing")
         else:
             self.queue_task("RESTART")
+
+    def _probe_command(self, arg_p: int, arg_s: int) -> None:
+        """Handle probe commands."""
+        if arg_s == 120:  # Test
+            cmd = "QUERY_PROBE"
+        else:
+            if self.config.get("bltouch"):
+                value = {10: "pin_down", 90: "pin_up", 160: "reset"}.get(arg_s)
+                cmd = f"BLTOUCH_DEBUG COMMAND={value}"
+            else:
+                value = {10: "1", 90: "0", 160: "0"}.get(arg_s)
+                cmd = f"SET_PIN PIN=_probe_enable VALUE={value}"
+        self.queue_task(cmd)
+
+    def _probe_at_position(self, arg_e: int, arg_x: int, arg_y: int) -> None:
+        """Handle probe commands."""
+        cmd = [
+            f"G1 X{arg_x} Y{arg_y}",
+            "PROBE",
+            "G1 Z10"
+        ]
+        self.queue_task(cmd)
 
 def load_component(config: ConfigHelper) -> TFTAdapter:
     """Load the TFT adapter component."""
