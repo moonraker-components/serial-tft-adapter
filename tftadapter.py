@@ -277,7 +277,7 @@ class TFTAdapter:
         self.direct_gcodes: Dict[str, FlexCallback] = {
             "G26": self._send_ok_response, # Mesh Validation Pattern (G26 H240 B70 R99)
             "G29": self._send_ok_response, # Bed leveling (G29)
-            "G30": self._probe_at_position, # Single Z-Probe (G30 E1 X28 Y207)
+            "G30": self._probe_at_position,
             "M20": self._list_sd_files,
             "M21": self._init_sd_card,
             "M23": self._select_sd_file,
@@ -539,7 +539,6 @@ class TFTAdapter:
         self.is_busy = True
         while self.queue:
             item = self.queue.pop(0)
-            logging.debug("Processing: %s", repr(item))
             if isinstance(item, (str, list)):
                 await self._process_script(item)
             else:
@@ -548,11 +547,11 @@ class TFTAdapter:
 
     async def _process_script(self, scripts: str) -> None:
         """Process a script task."""
-        logging.debug("script: %s", scripts)
         if isinstance(scripts, str):
             scripts = [scripts]
         try:
             for script in scripts:
+                logging.info("Processing gcode: %s", script)
                 if script in ["RESTART", "FIRMWARE_RESTART"]:
                     response = await self.klippy_apis.do_restart(script)
                 else:
@@ -567,6 +566,7 @@ class TFTAdapter:
     async def _process_command(self, item: Tuple[FlexCallback, Any]) -> None:
         """Process a command task."""
         cmd, args = item
+        logging.info("Processing command: %s(args = %s)", cmd.__name__, args)
         try:
             ret = cmd(**args)
             if ret is not None:
@@ -592,11 +592,22 @@ class TFTAdapter:
         elif response.startswith(("echo: Adjusted Print Time", "echo: ")):
             if re.match(r"^echo: \d+/\d+ | ET ", response):
                 return
-        elif response.startswith("// probe at "):
+        elif "probe: open" in response:
+            self._report(f"{PROBE_TEST_TEMPLATE}\nok", **self.values)
+        elif "probe accuracy results:" in response:
+            parts = response[3:].split(",")
+            data = {
+                "max_val": parts[0].split()[-1],
+                "min_val": parts[1].split()[-1],
+                "range_val": parts[2].split()[-1],
+                "avg_val": parts[3].split()[-1],
+                "stddev_val": parts[5].split()[-1]
+            }
+            self._report(f"{PROBE_ACCURACY_TEMPLATE}\nok", **data)
+        elif response.startswith("// probe at"):
             match = re.search(r"probe at ([\d.-]+),([\d.-]+) is z=([\d.-]+)", response)
-            if match:
-                x, y, z = match.groups()
-                self.ser_conn.command(f"Bed X:{x} Y:{y} Z:{z}")
+            x, y, z = match.groups()
+            self.ser_conn.command(f"Bed X:{x} Y:{y} Z:{z}")
         else:
             logging.debug("Unhandled response: %s", response)
 
@@ -973,13 +984,10 @@ class TFTAdapter:
         self._queue_task(cmd)
 
     def _probe_at_position(self, arg_x: int, arg_y: int, **_: Any) -> None:
-        """Handle probe commands."""
-        cmd = [
-            f"G1 X{arg_x} Y{arg_y}",
-            "PROBE",
-            "G1 Z10"
-        ]
-        self._queue_task(cmd)
+        """ Single Z-Probe at especific position)."""
+        self._queue_task([f"G1 F7000 X{arg_x} Y{arg_y}",
+                          "PROBE",
+                          "G1 Z10"])
 
 def load_component(config: ConfigHelper) -> TFTAdapter:
     """Load the TFT adapter component."""
