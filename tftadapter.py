@@ -480,6 +480,16 @@ class TFTAdapter:
         """Handle the event when Klippy disconnects."""
         # Tell the TFT that the printer is "off"
         self.ser_conn.command("Reset Software")
+        logging.info("Stopping autoreports")
+        if self.temperature_report_task:
+            self.temperature_report_task.cancel()
+            self.temperature_report_task = None
+        if self.position_report_task:
+            self.position_report_task.cancel()
+            self.position_report_task = None
+        if self.print_status_report_task:
+            self.print_status_report_task.cancel()
+            self.print_status_report_task = None
         self.is_ready = False
         self.last_printer_state = "O"
 
@@ -580,7 +590,7 @@ class TFTAdapter:
         """Handle the response from a G-code command."""
         if "// Sending" in response or ("B:" in response and "T0:" in response):
             return
-        logging.debug("Received gcode response: %s", response)
+        logging.info("Received gcode response: %s", response)
         if "Klipper state" in response or response.startswith("!!"):
             if "not hot enough" in response:
                 self.ser_conn.error(response[3:])
@@ -621,33 +631,38 @@ class TFTAdapter:
             self._report(template, **data)
             await asyncio.sleep(interval)
 
-    def _set_autoreport_interval(self, task, template, interval, **data) -> None:
-        if task:
-            task.done()
-        if interval > 0:
-            task = self.event_loop.create_task(self._autoreport(template, interval, **data))
-        self.ser_conn.command("ok")
-
     def _set_temperature_autoreport(self, arg_s: int) -> None:
         """Set the interval for temperature reports."""
-        self._set_autoreport_interval(self.temperature_report_task,
-                                      f"ok {TEMPERATURE_TEMPLATE}",
-                                      arg_s,
-                                      **self.values)
+        if self.temperature_report_task:
+            self.temperature_report_task.done()
+        if arg_s > 0:
+            self.temperature_report_task = self.event_loop.create_task(
+                self._autoreport(f"ok {TEMPERATURE_TEMPLATE}",
+                                 arg_s,
+                                 **self.values))
+        self.ser_conn.command("ok")
 
     def _set_position_autoreport(self, arg_s: int) -> None:
         """Set the interval for position reports."""
-        self._set_autoreport_interval(self.position_report_task,
-                                      POSITION_TEMPLATE,
-                                      arg_s,
-                                      **self.values)
+        if self.position_report_task:
+            self.position_report_task.done()
+        if arg_s > 0:
+            self.position_report_task = self.event_loop.create_task(
+                self._autoreport(f"ok {POSITION_TEMPLATE}",
+                                 arg_s,
+                                 **self.values))
+        self.ser_conn.command("ok")
 
     def _set_print_status_autoreport(self, arg_s: Optional[int] = 3) -> None:
         """Set the interval for print status reports."""
-        self._set_autoreport_interval(self.print_status_report_task,
-                                      PRINT_STATUS_TEMPLATE,
-                                      arg_s,
-                                      **self.values)
+        if self.print_status_report_task:
+            self.print_status_report_task.done()
+        if arg_s > 0:
+            self.print_status_report_task = self.event_loop.create_task(
+                self._autoreport(f"ok {PRINT_STATUS_TEMPLATE}",
+                                 arg_s,
+                                 **self.values))
+        self.ser_conn.command("ok")
 
     def _clean_filename(self, filename: str) -> str:
         """Clean up the filename by removing unnecessary parts."""
