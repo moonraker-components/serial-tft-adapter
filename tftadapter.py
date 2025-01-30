@@ -154,22 +154,6 @@ class SerialConnection:
         self.attempting_connect: bool = True
         self.partial_input: bytes = b""
 
-    def disconnect(self, reconnect: bool = False) -> None:
-        """Disconnect the serial connection."""
-        if self.connected:
-            if self.file_descriptor is not None:
-                self.event_loop.remove_reader(self.file_descriptor)
-                self.file_descriptor = None
-            self.connected = False
-            if self.serial is not None:
-                self.serial.close()
-            self.serial = None
-            self.partial_input = b""
-            logging.info("TFT Disconnected")
-        if reconnect and not self.attempting_connect:
-            self.attempting_connect = True
-            self.event_loop.delay_callback(1., self.connect)
-
     async def connect(self) -> None:
         """Attempt to establish a serial connection."""
         self.attempting_connect = True
@@ -331,12 +315,6 @@ class TFTAdapter:
         try:
             data = os.read(self.ser_conn.file_descriptor, 4096)
         except os.error:
-            return
-
-        if not data:
-            # possibly an error, disconnect
-            self.ser_conn.disconnect(reconnect=True)
-            logging.info("serial_display: No data received, disconnecting")
             return
 
         # Remove null bytes, separate into lines
@@ -929,16 +907,6 @@ class TFTAdapter:
             "G92 E0"                                                   # Reset Extruder
         ]
         self._queue_task(cmd)
-
-    def close(self) -> None:
-        """Close the TFT adapter and disconnect."""
-        self.ser_conn.disconnect()
-        if self.temperature_report_task:
-            self.temperature_report_task.cancel()
-        if self.position_report_task:
-            self.position_report_task.cancel()
-        if self.print_status_report_task:
-            self.print_status_report_task.cancel()
 
     def _set_feed_rate(self, arg_s: Optional[int] = None, **_: Any) -> None:
         """Set the feed rate."""
