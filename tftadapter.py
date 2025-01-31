@@ -124,7 +124,7 @@ FLOW_RATE_TEMPLATE = (
 
 FILE_LIST_TEMPLATE = (
     "Begin file list\n"
-    "{% for file, size in files %}{{ file }} {{ size }}\n{% endfor %}"
+    "{% for file, size in files | reverse %}{{ file }} {{ size }}\n{% endfor %}"
     "End file list\nok"
 )
 
