@@ -79,6 +79,8 @@ FIRMWARE_INFO_TEMPLATE = (
     "SOURCE_CODE_URL:https://github.com/Klipper3d/klipper "
     "PROTOCOL_VERSION:1.0 "
     "MACHINE_TYPE:{{ machine_name }}\n"
+    "Auto Bed Leveling\n"
+    "Cap:EXTRUDER_COUNT:1\n"
     "Cap:EEPROM:1\n"
     "Cap:AUTOREPORT_TEMP:1\n"
     "Cap:AUTOREPORT_POS:1\n"
@@ -225,7 +227,7 @@ class TFTAdapter:
 
         # Initialize command handlers
         self.direct_gcodes: Dict[str, FlexCallback] = {
-            "G26": self._send_ok_response,  # Mesh Validation Pattern
+            "G26": self._mesh_validation,  # Mesh Validation Pattern
             "G29": ["BED_MESH_CALIBRATE PROFILE=default", "SAVE_CONFIG"],
             "G30": self._probe_at_position,
             "M20": self._list_sd_files,
@@ -715,6 +717,29 @@ class TFTAdapter:
         if args.get("arg_u") == 1:
             cmd.extend("SAVE_CONFIG")
         self._queue_task(cmd)
+
+    def _mesh_validation(self,
+                         **args: Dict[int]) -> None:
+        """Print Validation Pattern."""
+        start = 10
+        width, height = self.values.get('toolhead').get('axis_maximum')[:2]
+        cmd = ["M82", # absolute extrusion mode"
+               f"M140 S{args.get('arg_b')}",
+               f"M104 S{args.get('arg_h')} T0",
+               "G92 E0", # reset extruder
+               "G1 F3000 Z1.0", # move z up little to prevent scratching of surface
+               f"G1 F5000.0 X{start} Y{height - start} Z0.2", # move to start-line position
+               f"M190 S{args.get('arg_b')}",
+               f"M109 S{args.get('arg_h')} T0",
+               "M107",
+               "G1 F1500 E2",
+               f"G1 F1500 X{start} Y{start} E10",
+               f"G1 F1500 X{width - start} Y{start} E20",
+               f"G1 F1500 X{width - start} Y{height - start} E30",
+               f"G1 F1500 X{start} Y{height - start} E40",
+               f"G1 F5000 X{start} Y{height - start} Z10"]
+        self._queue_task(cmd)
+        self.process_line("M81")
 
     def _set_bed_leveling(self,
                           **args: Dict[int]) -> None:
