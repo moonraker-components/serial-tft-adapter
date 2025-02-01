@@ -374,10 +374,10 @@ class TFTAdapter:
         }
         try:
             self.values = await self.klippy_apis.query_objects(sub_args)
-            self._print_status_change(self.values.get("print_stats", {}).get("state"), None)
             await self.klippy_apis.subscribe_objects(sub_args, self._subcription_updates)
             self.is_ready = True
             self.is_busy = False
+            logging.info("Current printer state: %s", self.values.get("print_stats", {}))
         except self.server.error:
             logging.exception("Unable to complete subscription request")
 
@@ -387,11 +387,13 @@ class TFTAdapter:
             if key in self.values:
                 self.values[key].update(values)
         filament_sensor = data.get(self.filament_sensor)
+        if data.get("bed_mesh") is not None:
+            self._bed_mesh_change()
         state = data.get("print_stats", {}).get("state")
-        if state:
+        if state is not None:
             self._print_status_change(state, filament_sensor)
-        display_status: Optional[int] = data.get("display_status")
-        if data.get("display_status"):
+        display_status = data.get("display_status")
+        if data.get("display_status") is not None:
             self._display_status_change(display_status)
 
     def _display_status_change(self, display_status: Dict[str, Any]) -> None:
@@ -407,11 +409,17 @@ class TFTAdapter:
         elif not message.startswith("ET "):
             self.ser_conn.notification(message)
 
+    def _bed_mesh_change(self) -> None:
+        """Process bed mesh changes."""
+        bed_mesh = self.values.get("bed_mesh")
+        bed_leveling = "ON" if bed_mesh.get("profile_name") != "" else "OFF"
+        self.ser_conn.echo(f"Bed Leveling {bed_leveling}")
+
     def _print_status_change(self,
                              state: Dict[str, Any],
                              filament_sensor: Dict[str, Any]) -> None:
-        """Process subscription changes."""
-        logging.debug("Current printer state: %s", self.last_printer_state)
+        """Process print status changes."""
+        logging.info("Previous printer state: %s", self.last_printer_state)
         filament_detected = None
         if filament_sensor:
             filament_detected = filament_sensor["filament_detected"]
@@ -737,12 +745,12 @@ class TFTAdapter:
     def _set_bed_leveling(self,
                           **args: Dict[int]) -> None:
         """Set the bed leveling state."""
-        if args.get("arg_s"):
+        if args.get("arg_s") is not None:
             if args.get("arg_s") == 0:
                 self._queue_task("BED_MESH_CLEAR")
             else:
                 self._queue_task("BED_MESH_PROFILE LOAD=default")
-        elif args.get("arg_z"):
+        elif args.get("arg_z") is not None:
             # TODO: Not working
             self._queue_task([
                 "BED_MESH_PROFILE LOAD=default",
@@ -762,6 +770,7 @@ class TFTAdapter:
                 )
         else:
             # TODO: Falta implementar M420 sin parametros
+            self._bed_mesh_change()
             self.ser_conn.command("ok")
 
     def _power_off(self) -> None:
@@ -958,7 +967,7 @@ class TFTAdapter:
         if arg_s == 120:  # Test
             cmd = "QUERY_PROBE"
         else:
-            if self.config.get("bltouch"):
+            if self.config.get("bltouch") is not None:
                 value = {10: "pin_down", 90: "pin_up", 160: "reset"}.get(arg_s)
                 cmd = f"BLTOUCH_DEBUG COMMAND={value}"
             else:
