@@ -260,7 +260,7 @@ class TFTAdapter:
         # make a request to Klippy
         self.direct_gcodes: Dict[str, FlexCallback] = {
             "G26": self._send_ok_response, # Mesh Validation Pattern (G26 H240 B70 R99)
-            "G29": self._send_ok_response, # Bed leveling (G29)
+            "G29": ["BED_MESH_CALIBRATE PROFILE=default","SAVE_CONFIG"],
             "G30": self._probe_at_position,
             "M20": self._list_sd_files,
             "M21": self._init_sd_card,
@@ -494,7 +494,7 @@ class TFTAdapter:
             self._queue_task(line)
 
         elif gcode in self.direct_gcodes:
-            if isinstance(self.direct_gcodes[gcode], str):
+            if isinstance(self.direct_gcodes[gcode], (str, list)):
                 self._queue_task(self.direct_gcodes[gcode])
                 return
             params: Dict[str, Any] = {}
@@ -765,9 +765,7 @@ class TFTAdapter:
                 f"1 {points[1][0]} {points[1][1]} {points[1][2]} {points[1][3]} {points[1][4]}\n"
                 f"2 {points[2][0]} {points[2][1]} {points[2][2]} {points[2][3]} {points[2][4]}\n"
                 f"3 {points[3][0]} {points[3][1]} {points[3][2]} {points[3][3]} {points[3][4]}\n"
-                f"4 {points[4][0]} {points[4][1]} {points[4][2]} {points[4][3]} {points[4][4]}\n"
-                # "X:198.00 Y:220.00 Z:10.74 E:0.00 Count X:15840 Y:17600 Z:16800\n"
-                )
+                f"4 {points[4][0]} {points[4][1]} {points[4][2]} {points[4][3]} {points[4][4]}\n")
         else:
             # TODO: Falta implementar M420 sin parametros
             self._bed_mesh_change()
