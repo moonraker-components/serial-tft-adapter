@@ -558,7 +558,9 @@ class TFTAdapter:
             return
         logging.info("Received gcode response: %s", response)
         if "Klipper state" in response or response.startswith("!!"):
-            if "not hot enough" in response:
+            if "not hot enough" in response or \
+               "Must home" in response or \
+               "Move exceeds" in response:
                 self.ser_conn.error(response[3:])
             else:
                 logging.error("Error response: %s", response)
