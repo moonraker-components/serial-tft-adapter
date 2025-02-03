@@ -881,27 +881,18 @@ class TFTAdapter:
 
     def _load_filament(self) -> None:
         """Load filament into the extruder."""
-        params = {"length": 25,
-                  "extruder": 0,
-                  "zmove": 0}
-        self._handle_filament(params)
+        self._handle_filament(length = 25)
 
     def _unload_filament(self) -> None:
         """Unload filament from the extruder."""
-        params = { "length": -25,
-                   "extruder": 0,
-                   "zmove": 0}
-        self._handle_filament(params)
+        self._handle_filament(length= -25)
 
-    def _handle_filament(self, args: Dict[str, Any]) -> None:
+    def _handle_filament(self, length: int, extruder: float = 0, zmove: float = 10) -> None:
         """Handle filament loading and unloading."""
-        cmd = [
-            "G91",                                                     # Relative Positioning
-            f"G92 E{args.get('extruder')}",                            # Reset Extruder
-            f"G1 Z{args.get('zmove')} E{args.get('length')} F{3*60}",  # Extrude or Retract
-            "G92 E0"                                                   # Reset Extruder
-        ]
-        self._queue_task(cmd)
+        self._queue_task(["G91",                             # Relative Positioning
+                          f"G92 E{extruder}",                # Reset Extruder
+                          f"G1 Z{zmove} E{length} F{3*60}",  # Extrude or Retract
+                          "G92 E0"])                         # Reset Extruder
 
     def _set_feed_rate(self, arg_s: Optional[int] = None, **_: Any) -> None:
         """Set the feed rate."""
