@@ -432,7 +432,6 @@ class TFTAdapter:
             self.ser_conn.action("cancel" if state == "cancelled" else "print_end")
             if self.print_status_report_task:
                 self.print_status_report_task.cancel()
-                self.print_status_report_task = None
         self.last_printer_state = state
 
     def _process_klippy_shutdown(self) -> None:
@@ -447,13 +446,10 @@ class TFTAdapter:
         logging.info("Stopping autoreports")
         if self.temperature_report_task:
             self.temperature_report_task.cancel()
-            self.temperature_report_task = None
         if self.position_report_task:
             self.position_report_task.cancel()
-            self.position_report_task = None
         if self.print_status_report_task:
             self.print_status_report_task.cancel()
-            self.print_status_report_task = None
         self.is_ready = False
         self.last_printer_state = "O"
 
@@ -598,38 +594,36 @@ class TFTAdapter:
             self._report(template, **data)
             await asyncio.sleep(interval)
 
-    def _set_temperature_autoreport(self, arg_s: int) -> None:
+    def _set_autoreport(self, task_attr, template, arg_s: int) -> None:
         """Set the interval for temperature reports."""
-        if self.temperature_report_task:
-            self.temperature_report_task.done()
+        task = getattr(self, task_attr, None)
+        if task:
+            task.cancel()
         if arg_s > 0:
-            self.temperature_report_task = self.event_loop.create_task(
-                self._autoreport(f"ok {TEMPERATURE_TEMPLATE}",
+            task = self.event_loop.create_task(
+                self._autoreport(template,
                                  arg_s,
                                  **self.values))
+        setattr(self, task_attr, task)
         self.ser_conn.command("ok")
+
+    def _set_temperature_autoreport(self, arg_s: int) -> None:
+        """Set the interval for temperature reports."""
+        self._set_autoreport("temperature_report_task",
+                             f"ok {TEMPERATURE_TEMPLATE}",
+                             arg_s)
 
     def _set_position_autoreport(self, arg_s: int) -> None:
         """Set the interval for position reports."""
-        if self.position_report_task:
-            self.position_report_task.done()
-        if arg_s > 0:
-            self.position_report_task = self.event_loop.create_task(
-                self._autoreport(f"ok {POSITION_TEMPLATE}",
-                                 arg_s,
-                                 **self.values))
-        self.ser_conn.command("ok")
+        self._set_autoreport("position_report_task",
+                             POSITION_TEMPLATE,
+                             arg_s)
 
     def _set_print_status_autoreport(self, arg_s: Optional[int] = 3) -> None:
         """Set the interval for print status reports."""
-        if self.print_status_report_task:
-            self.print_status_report_task.done()
-        if arg_s > 0:
-            self.print_status_report_task = self.event_loop.create_task(
-                self._autoreport(f"ok {PRINT_STATUS_TEMPLATE}",
-                                 arg_s,
-                                 **self.values))
-        self.ser_conn.command("ok")
+        self._set_autoreport("print_status_report_task",
+                             PRINT_STATUS_TEMPLATE,
+                             arg_s)
 
     def _clean_filename(self, filename: str) -> str:
         """Clean up the filename by removing unnecessary parts."""
@@ -845,12 +839,12 @@ class TFTAdapter:
                       arg_a: Optional[int] = None,
                       arg_string: Optional[str] = None) -> None:
         """Send serial print message."""
-        self.ser_conn.command("ok")
         if arg_p == 0 and arg_string != "action:cancel":
             if arg_a == 1:
                 self.ser_conn.command(f"//{arg_string}")
             else:
                 self.ser_conn.echo(f"{arg_string}\nok" if arg_string else "ok")
+        self.ser_conn.command("ok")
 
     def _set_acceleration(self,
                           arg_x: Optional[float] = None,
