@@ -209,7 +209,7 @@ class TFTAdapter:
         self.is_ready: bool = False
         self.is_busy: bool = False
         self.queue: List[Union[str, Tuple[FlexCallback, Any]]] = []
-        self.last_printer_state: str = "O"
+        self.last_printer_state: str = None
 
         # Configuration values
         self.printer_info: Dict[str, Any] = {
@@ -447,7 +447,7 @@ class TFTAdapter:
         if self.print_status_report_task:
             self.print_status_report_task.cancel()
         self.is_ready = False
-        self.last_printer_state = "O"
+        self.last_printer_state = None
 
     def process_line(self, line: str) -> None:
         """Process an incoming line of G-code."""
