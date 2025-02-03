@@ -52,26 +52,26 @@ TEMPERATURE_TEMPLATE = (
 )
 
 PROBE_OFFSET_TEMPLATE = (
-    "M851 X{{ config.bltouch.x_offset | float - gcode_move.homing_origin[0] }} "
-    "Y{{ config.bltouch.y_offset | float - gcode_move.homing_origin[1] }} "
-    "Z{{ config.bltouch.z_offset | float - gcode_move.homing_origin[2] }}"
+    "M851 X{{ config_file.bltouch.x_offset | float - gcode_move.homing_origin[0] }} "
+    "Y{{ config_file.bltouch.y_offset | float - gcode_move.homing_origin[1] }} "
+    "Z{{ config_file.bltouch.z_offset | float - gcode_move.homing_origin[2] }}"
 )
 
 REPORT_SETTINGS_TEMPLATE = (
     "M203 X{{ toolhead.max_velocity }} Y{{ toolhead.max_velocity }} "
-    "Z{{ config.printer.max_z_velocity }} E{{ extruder.max_extrude_only_velocity }}\n"
+    "Z{{ config_file.printer.max_z_velocity }} E{{ extruder.max_extrude_only_velocity }}\n"
     "M201 X{{ toolhead.max_accel }} Y{{ toolhead.max_accel }} "
-    "Z{{ config.printer.max_z_accel }} E{{ extruder.max_extrude_only_accel }}\n"
+    "Z{{ config_file.printer.max_z_accel }} E{{ extruder.max_extrude_only_accel }}\n"
     "M206 X{{ gcode_move.homing_origin[0] }} "
          "Y{{ gcode_move.homing_origin[1] }} "
          "Z{{ gcode_move.homing_origin[2] }}\n"
     f"{PROBE_OFFSET_TEMPLATE}\n"
-    "M420 S1 Z{{ config.bed_mesh.fade_end }}\n"
+    "M420 S1 Z{{ config_file.bed_mesh.fade_end }}\n"
     "M106 S{{ fan.speed * 255 | int }}\n"
     "work:{min:{x:0,y:0,z:0},"
-          "max:{x:{{ config.stepper_x.position_max }},"
-               "y:{{ config.stepper_y.position_max }},"
-               "z:{{ config.stepper_z.position_max }}}}"
+          "max:{x:{{ config_file.stepper_x.position_max }},"
+               "y:{{ config_file.stepper_y.position_max }},"
+               "z:{{ config_file.stepper_z.position_max }}}}"
 )
 
 FIRMWARE_INFO_TEMPLATE = (
@@ -117,12 +117,12 @@ PROBE_ACCURACY_TEMPLATE = (
 class SerialConnection:
     """Manages the serial connection to the TFT."""
 
-    def __init__(self, config: ConfigHelper, tft: TFTAdapter) -> None:
+    def __init__(self, config_file: ConfigHelper, tft: TFTAdapter) -> None:
         """Initialize the serial connection."""
-        self.event_loop = config.get_server().get_event_loop()
+        self.event_loop = config_file.get_server().get_event_loop()
         self.tft = tft
-        self.port: str = config.get("serial")
-        self.baud = config.getint("baud", 57600)
+        self.port: str = config_file.get("serial")
+        self.baud = config_file.getint("baud", 57600)
         self.serial: Optional[serial.Serial] = None
         self.file_descriptor: Optional[int] = None
         self.connected = False
@@ -204,18 +204,18 @@ class TFTAdapter:
         self.klippy_apis: APIComp = self.server.lookup_component("klippy_apis")
 
         # Basic state
-        self.values: Dict[str, Dict[str, Any]] = {}
-        self.config: Dict[str, Any] = {}
-        self.firmware_name: Optional[str] = None
+        self.object_status: Dict[str, Dict[str, Any]] = {}
+        self.config_file: Dict[str, Any] = {}
         self.is_ready: bool = False
         self.is_busy: bool = False
         self.queue: List[Union[str, Tuple[FlexCallback, Any]]] = []
         self.last_printer_state: str = "O"
 
         # Configuration values
-        self.machine_name: str = config.get("machine_name", "Klipper")
-        self.filament_sensor: str = (
-            f"filament_switch_sensor {config.get('filament_sensor_name')}")
+        self.printer_info: Dict[str, Any] = {
+            "machine_name": config.get("machine_name", "Klipper"),
+            "filament_sensor": f"filament_switch_sensor {config.get('filament_sensor_name')}"
+        }
 
         # Report tasks
         self.temperature_report_task: Optional[asyncio.Task] = None
@@ -320,11 +320,11 @@ class TFTAdapter:
         """Handle the event when Klippy is ready."""
         # Request "info" and "configfile" status
         retries = 10
-        printer_info: Dict[str, Any] = {}
         cfg_status: Dict[str, Any] = {}
         while retries:
             try:
-                printer_info = await self.klippy_apis.get_klippy_info()
+                klippy_info = await self.klippy_apis.get_klippy_info()
+                self.printer_info.update({"firmware_name": "Marlin | Klipper " + klippy_info.get("software_version")})
                 cfg_status = await self.klippy_apis.query_objects({"configfile": None})
             except self.server.error:
                 logging.exception("TFT initialization request failed")
@@ -334,9 +334,7 @@ class TFTAdapter:
                 await asyncio.sleep(1.)
                 continue
             break
-
-        self.firmware_name = "Marlin | Klipper " + printer_info["software_version"]
-        self.config: Dict[str, Any] = cfg_status.get("configfile", {}).get("config", {})
+        self.config_file: Dict[str, Any] = cfg_status.get("configfile", {}).get("config", {})
 
         # Make subscription request
         sub_args: Dict[str, Optional[List[str]]] = {"gcode_move": None,
@@ -349,27 +347,25 @@ class TFTAdapter:
                                                     "display_status": None,
                                                     "print_stats": None,
                                                     "probe": None,
-                                                    f"{self.filament_sensor}": None}
+                                                    f"{self.printer_info.get('filament_sensor')}": None}
         try:
-            self.values = await self.klippy_apis.query_objects(sub_args)
+            self.object_status = await self.klippy_apis.query_objects(sub_args)
             await self.klippy_apis.subscribe_objects(sub_args, self._subcription_updates)
             self.is_ready = True
             self.is_busy = False
-            logging.info("Current printer state: %s", self.values.get("print_stats", {}))
         except self.server.error:
             logging.exception("Unable to complete subscription request")
 
     def _subcription_updates(self, data: Dict[str, Any], _: float) -> None:
-        """Update printer state values."""
+        """Update printer states values."""
         for key, values in data.items():
-            if key in self.values:
-                self.values[key].update(values)
-        filament_sensor = data.get(self.filament_sensor)
+            if key in self.object_status:
+                self.object_status[key].update(values)
         if data.get("bed_mesh") is not None:
             self._bed_mesh_change()
-        state = data.get("print_stats", {}).get("state")
-        if state is not None:
-            self._print_status_change(state, filament_sensor)
+        printer_state = data.get("print_stats", {}).get("state")
+        if printer_state is not None:
+            self._print_status_change(printer_state, data.get(self.printer_info.get("filament_sensor")))
         display_status = data.get("display_status")
         if data.get("display_status") is not None:
             self._display_status_change(display_status)
@@ -389,19 +385,19 @@ class TFTAdapter:
 
     def _bed_mesh_change(self) -> None:
         """Process bed mesh changes."""
-        bed_mesh = self.values.get("bed_mesh")
+        bed_mesh = self.object_status.get("bed_mesh")
         bed_leveling = "ON" if bed_mesh.get("profile_name") != "" else "OFF"
         self.ser_conn.echo(f"Bed Leveling {bed_leveling}")
 
     def _print_status_change(self,
-                             state: Dict[str, Any],
+                             printer_state: Dict[str, Any],
                              filament_sensor: Dict[str, Any]) -> None:
         """Process print status changes."""
         logging.info("Previous printer state: %s", self.last_printer_state)
         filament_detected = None
         if filament_sensor:
             filament_detected = filament_sensor["filament_detected"]
-        if state == "printing":
+        if printer_state == "printing":
             if self.last_printer_state == "paused":
                 self.ser_conn.action("resume")
                 if filament_detected:
@@ -412,7 +408,7 @@ class TFTAdapter:
             else:
                 self.ser_conn.action("print_start")
 
-                filename = self.values["print_stats"]["filename"]
+                filename = self.object_status["print_stats"]["filename"]
                 metadata = self.file_manager.get_file_metadata(filename)
                 logging.info("metadata: %s", metadata)
                 estimated_time = metadata.get("estimated_time")
@@ -425,14 +421,14 @@ class TFTAdapter:
                 if layer_count:
                     self._queue_task(
                         f"SET_PRINT_STATS_INFO CURRENT_LAYER=1 TOTAL_LAYER={layer_count}")
-                    self._report(f"{PRINT_STATUS_TEMPLATE}", **self.values)
-        elif state == "paused":
+                    self._report(f"{PRINT_STATUS_TEMPLATE}", **self.object_status)
+        elif printer_state == "paused":
             self.ser_conn.action("paused" if filament_detected else "paused filament_runout")
-        if state in ("cancelled","complete"):
-            self.ser_conn.action("cancel" if state == "cancelled" else "print_end")
+        if printer_state in ("cancelled","complete"):
+            self.ser_conn.action("cancel" if printer_state == "cancelled" else "print_end")
             if self.print_status_report_task:
                 self.print_status_report_task.cancel()
-        self.last_printer_state = state
+        self.last_printer_state = printer_state
 
     def _process_klippy_shutdown(self) -> None:
         """Handle the event when Klippy shuts down."""
@@ -483,7 +479,12 @@ class TFTAdapter:
                                                        else float(part[1:])
             logging.debug("params: %s", params)
             func = self.direct_gcodes[gcode]
-            self._queue_task((func, params))
+            if "M150" in gcode:
+                logging.info("params: %s", params)
+                self.event_loop.register_callback(self._set_led, **params)
+                self.ser_conn.command("ok")
+            else:
+                self._queue_task((func, params))
             return
         else:
             logging.warning("Unregistered command: %s", line)
@@ -528,7 +529,7 @@ class TFTAdapter:
         except self.server.error:
             msg = f"Error executing script {script}"
             logging.exception(msg)
-            self.ser_conn.error(msg)
+            # self.ser_conn.error(msg)
 
     async def _process_command(self, item: Tuple[FlexCallback, Any]) -> None:
         """Process a command task."""
@@ -568,7 +569,7 @@ class TFTAdapter:
                 return
         elif "probe: open" in response:
             self._report("Last query: {{ probe.last_query }}\n"
-                         "Last Z result: {{ probe.last_z_result }}\nok", **self.values)
+                         "Last Z result: {{ probe.last_z_result }}\nok", **self.object_status)
         elif "probe accuracy results:" in response:
             parts = response[3:].split(",")
             data = {"max_val": parts[0].split()[-1],
@@ -603,7 +604,7 @@ class TFTAdapter:
             task = self.event_loop.create_task(
                 self._autoreport(template,
                                  arg_s,
-                                 **self.values))
+                                 **self.object_status))
         setattr(self, task_attr, task)
         self.ser_conn.command("ok")
 
@@ -646,13 +647,13 @@ class TFTAdapter:
 
     def _select_sd_file(self, arg_string: str) -> None:
         """Select an SD file for printing."""
-        self.values["print_stats"]["filename"] = self._clean_filename(arg_string)
+        self.object_status["print_stats"]["filename"] = self._clean_filename(arg_string)
         self._queue_task(f"M23 {self._clean_filename(arg_string)}")
 
     def _start_print(self) -> None:
         """Start printing the selected file."""
-        selected_file = self.values["print_stats"]["filename"]
-        sd_state = self.values.get("print_stats", {}).get("state", "standby")
+        selected_file = self.object_status["print_stats"]["filename"]
+        sd_state = self.object_status.get("print_stats", {}).get("state", "standby")
         if sd_state == "paused":
             self._queue_task("RESUME")
         elif sd_state in ("standby", "cancelled"):
@@ -663,7 +664,7 @@ class TFTAdapter:
     def _pause_print(self, **_: Any) -> None:
         """Pause the current print."""
         # TODO: handle P1
-        sd_state = self.values.get("print_stats", {}).get("state", "standby")
+        sd_state = self.object_status.get("print_stats", {}).get("state", "standby")
         if sd_state == "printing":
             self._queue_task("PAUSE")
         else:
@@ -678,7 +679,7 @@ class TFTAdapter:
 
     def _set_led(self, **args: Dict[int]) -> None:
         """Set the LED color and brightness."""
-        # TODO: read led name from config
+        # TODO: read led name from config_file
         red = args.get("arg_r", 0) / 255
         green = args.get("arg_u", 0) / 255
         blue = args.get("arg_b", 0) / 255
@@ -701,7 +702,7 @@ class TFTAdapter:
         if "arg_z" in args:
             offsets.append(f"Z_ADJUST={args['arg_z']}")
         offset_str = " ".join(offsets)
-        if "xyz" in self.values.get("toolhead").get("homed_axes"):
+        if "xyz" in self.object_status.get("toolhead").get("homed_axes"):
             offset_str = f"{offset_str} MOVE=1 MOVE_SPEED=10"
         self._queue_task(f"SET_GCODE_OFFSET {offset_str}")
 
@@ -718,7 +719,7 @@ class TFTAdapter:
                          **args: Dict[int]) -> None:
         """Print Validation Pattern."""
         start = 10
-        width, height = self.values.get('toolhead').get('axis_maximum')[:2]
+        width, height = self.object_status.get('toolhead').get('axis_maximum')[:2]
         cmd = ["M82", # absolute extrusion mode"
                f"M140 S{args.get('arg_b')}",
                f"M104 S{args.get('arg_h')} T0",
@@ -751,9 +752,9 @@ class TFTAdapter:
                 "BED_MESH_PROFILE LOAD=default",
                 f"BED_MESH_OFFSET ZFADE={args['arg_z']}"])
         elif args.get("arg_v") == 1 and args.get("arg_t") == 1:
-            mesh = self.values["bed_mesh"]
+            mesh = self.object_status["bed_mesh"]
             points = mesh.get("profiles").get("default").get("points")
-            logging.debug("mesh: %s", self.values["bed_mesh"])
+            logging.debug("mesh: %s", self.object_status["bed_mesh"])
             self.ser_conn.command("Bilinear Leveling Grid:\n"
                 "----- 0------ 1------ 2------ 3------ 4\n"
                 f"0 {points[0][0]} {points[0][1]} {points[0][2]} {points[0][3]} {points[0][4]}\n"
@@ -820,15 +821,15 @@ class TFTAdapter:
 
     def _report_software_endstops(self) -> None:
         """Report the status of software endstops."""
-        filament_sensor=self.values.get(self.filament_sensor, {})
+        filament_sensor=self.object_status.get(self.printer_info.get("filament_sensor"), {})
         state = { "state": "On" if filament_sensor.get("enabled", False) else "Off"}
         self._report("Soft endstops: {{ state }}\nok", **state)
-        self._print_status_change(self.values.get("print_stats", {}).get("state"), None)
+        self._print_status_change(self.object_status.get("print_stats", {}).get("state"), None)
 
     def _report_settings(self, **_: Any) -> None:
         """Report the printer settings."""
         self._report(f"{REPORT_SETTINGS_TEMPLATE}\nok", **(
-            self.values | {"config":self.config}))
+            self.object_status | {"config_file":self.config_file}))
 
     def _send_ok_response(self, **_: Any) -> None:
         """Send an "ok" response."""
@@ -876,7 +877,7 @@ class TFTAdapter:
     def _set_probe_offset(self, **args: Dict[float]) -> None:
         """Set the probe offsets."""
         if not args:
-            self._report(PROBE_OFFSET_TEMPLATE, **(self.values | {"config":self.config}))
+            self._report(PROBE_OFFSET_TEMPLATE, **(self.object_status | {"config_file":self.config_file}))
         self.ser_conn.command("ok")
 
     def _load_filament(self) -> None:
@@ -900,7 +901,7 @@ class TFTAdapter:
             self._queue_task(f"M220 S{arg_s}")
         else:
             self._report(
-                "FR:{{ gcode_move.speed_factor * 100 | int }}%\nok", **self.values)
+                "FR:{{ gcode_move.speed_factor * 100 | int }}%\nok", **self.object_status)
 
     def _set_flow_rate(self, arg_s: Optional[int] = None, **_: Any) -> None:
         """Set the flow rate."""
@@ -908,26 +909,26 @@ class TFTAdapter:
             self._queue_task(f"M221 S{arg_s}")
         else:
             self._report(
-                "E0 Flow:{{ gcode_move.extrude_factor * 100 | int }}%\nok", **self.values)
+                "E0 Flow:{{ gcode_move.extrude_factor * 100 | int }}%\nok", **self.object_status)
 
     def _report_temperature(self) -> None:
         """Report the current temperature."""
-        self._report(f"{TEMPERATURE_TEMPLATE}\nok", **self.values)
+        self._report(f"{TEMPERATURE_TEMPLATE}\nok", **self.object_status)
 
     def _report_position(self) -> None:
         """Report the current position."""
-        self._report(f"{POSITION_TEMPLATE}\nok", **self.values)
+        self._report(f"{POSITION_TEMPLATE}\nok", **self.object_status)
 
     def _report_firmware_info(self) -> None:
         """Report the firmware information."""
         self._report(FIRMWARE_INFO_TEMPLATE, **(
-            self.values |
-            { "machine_name": self.machine_name } |
-            { "firmware_name": self.firmware_name }))
+            self.object_status |
+            {"machine_name": self.printer_info.get("machine_name")} |
+            {"firmware_name": self.printer_info.get("firmware_name")}))
 
     def _z_offset_apply_probe(self) -> List[str]:
         """Apply the Z offset from the probe."""
-        sd_state = self.values.get("print_stats", {}).get("state", "standby")
+        sd_state = self.object_status.get("print_stats", {}).get("state", "standby")
         if sd_state in ("printing", "paused"):
             self.ser_conn.error("Not saved - Printing")
         else:
@@ -935,7 +936,7 @@ class TFTAdapter:
 
     def _restore_settings(self) -> List[str]:
         """Restore settings from file."""
-        sd_state = self.values.get("print_stats", {}).get("state", "standby")
+        sd_state = self.object_status.get("print_stats", {}).get("state", "standby")
         if sd_state in ("printing", "paused"):
             self.ser_conn.error("Not saved - Printing")
         else:
@@ -946,7 +947,7 @@ class TFTAdapter:
         if arg_s == 120:  # Test
             cmd = "QUERY_PROBE"
         else:
-            if self.config.get("bltouch") is not None:
+            if self.config_file.get("bltouch") is not None:
                 value = {10: "pin_down", 90: "pin_up", 160: "reset"}.get(arg_s)
                 cmd = f"BLTOUCH_DEBUG COMMAND={value}"
             else:
@@ -960,6 +961,6 @@ class TFTAdapter:
                           "PROBE",
                           "G1 Z10"])
 
-def load_component(config: ConfigHelper) -> TFTAdapter:
+def load_component(config_file: ConfigHelper) -> TFTAdapter:
     """Load the TFT adapter component."""
-    return TFTAdapter(config)
+    return TFTAdapter(config_file)
