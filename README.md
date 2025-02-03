@@ -20,6 +20,7 @@ This project provides an adapter for integrating TFT displays with Klipper firmw
     baud: 115200
     machine_name: Artillery Genius Pro
     filament_sensor_name: filament_sensor
+    led_config_name: statusled
     ```
 4. Enable automatic updates for the Serial TFT Moonraker Adapter by adding the following configuration to your Moonraker configuration file:
     ```ini
