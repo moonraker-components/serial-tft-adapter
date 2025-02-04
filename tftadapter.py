@@ -663,7 +663,7 @@ class TFTAdapter:
         sd_state = self.object_status.get("print_stats", {}).get("state", "standby")
         if sd_state == "paused":
             self._queue_task("RESUME")
-        elif sd_state in ("standby", "cancelled"):
+        elif sd_state in ("standby", "cancelled", "complete"):
             self._queue_task(f"SDCARD_PRINT_FILE FILENAME=\"{selected_file}\"")
         else:
             self.ser_conn.error("Cannot start printing, printer is not in a stopped state")
