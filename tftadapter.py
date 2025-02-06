@@ -475,9 +475,9 @@ class TFTAdapter:
                     args = params.get("arg_string")
                     params["arg_string"] = part if args is None else f"{args} {part}"
                 else:
-                    params[f"arg_{part[0].lower()}"] = int(part[1:]) \
-                                                       if re.match(r"^-?\d+$", part[1:]) \
-                                                       else float(part[1:])
+                    params[f"arg_{part[0].lower()}"] = (int(part[1:])
+                                                        if re.match(r"^-?\d+$", part[1:])
+                                                        else float(part[1:]))
             logging.debug("params: %s", params)
             func = self.direct_gcodes[gcode]
             if "M150" in gcode:
@@ -556,9 +556,9 @@ class TFTAdapter:
             return
         logging.info("Received gcode response: %s", response)
         if "Klipper state" in response or response.startswith("!!"):
-            if "not hot enough" in response or \
-               "Must home" in response or \
-               "Move exceeds" in response:
+            if ("not hot enough" in response or
+                "Must home" in response or
+                "Move exceeds" in response):
                 self.ser_conn.error(response[3:])
             else:
                 logging.error("Error response: %s", response)
