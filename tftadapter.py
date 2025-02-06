@@ -628,8 +628,11 @@ class TFTAdapter:
 
     def _clean_filename(self, filename: str) -> str:
         """Clean up the filename by removing unnecessary parts."""
+        logging.info("original filename: %s", filename)
         # Remove quotes and whitespace
         filename.strip(" \"\t\n")
+        # if filename.startswith("/"):
+        #     filename = filename[1:]
         # Remove drive number
         if filename.startswith("0:/"):
             filename = filename[3:]
@@ -647,8 +650,11 @@ class TFTAdapter:
 
     def _select_sd_file(self, arg_string: str) -> None:
         """Select an SD file for printing."""
+        logging.info(f"arg_string: {arg_string}")
+        size = 1683039
         self.object_status["print_stats"]["filename"] = self._clean_filename(arg_string)
-        self._queue_task(f"M23 {self._clean_filename(arg_string)}")
+        logging.info("arg_string: %s", self.object_status["print_stats"]["filename"])
+        self.ser_conn.command(f"File opened:{arg_string} Size:{size}\nFile selected\nok")
 
     def _start_print(self) -> None:
         """Start printing the selected file."""
@@ -782,38 +788,46 @@ class TFTAdapter:
         self.ser_conn.command("SD card ok\nok")
 
     def _list_sd_files(self, **_: Any) -> None:
-        """List the files on the SD card."""
-        response_type = 2
-        if response_type != 2:
-            logging.info("Cannot process response type %s in M20", response_type)
-            return
-        path = "/"
+        """List the files and directories on the SD card recursively."""
+        def scan_directory(path: str) -> Dict[str, List[Tuple[str, int, float]]]:
+            """Recursively scan the directory for files."""
+            try:
+                contents = self.file_manager.list_dir(path, simple_format=False)
+                if not contents:
+                    return {"files": [], "dirs": []}
 
-        # Strip quotes if they exist
-        path = path.strip("\"")
+                files = [
+                    (file["filename"], file["size"], file["modified"])
+                    for file in contents.get("files", [])
+                    if not file["filename"].startswith(".")
+                ]
+                dirs = [
+                    dir["dirname"] for dir in contents.get("dirs", [])
+                    if not dir["dirname"].startswith(".")
+                ]
 
-        # Path should come in as "0:/macros, or 0:/<gcode_folder>".  With
-        # repetier compatibility enabled, the default folder is root,
-        # ie. "0:/"
-        if path.startswith("0:/"):
-            path = path[2:]
-        response: Dict[str, Any] = {"dir": path}
-        response["files"] = []
+                for dir_name in dirs:
+                    subpath = os.path.join(path, dir_name)
+                    sub_files = scan_directory(subpath)
+                    files.extend([(f"{dir_name}/{f[0]}", f[1], f[2]) for f in sub_files["files"]])
 
-        if path == "/":
-            response["dir"] = "/gcodes"
-            path = "gcodes"
-        elif path.startswith("/gcodes"):
-            path = path[1:]
+                return {"files": files, "dirs": dirs}
+            except Exception as e:
+                logging.exception(f"Error scanning directory {path}: {e}")
+                return {"files": [], "dirs": []}
 
-        files = {"files": []}
-        flist = self.file_manager.list_dir(path, simple_format=False)
-        if flist:
-            files["files"] = [(file["filename"], file["size"])
-                            for file in flist.get("files", [])]
-        self._report("Begin file list\n"
-                     "{% for file, size in files | reverse %}{{ file }} {{ size }}\n{% endfor %}"
-                     "End file list\nok", **files)
+        root_path = "gcodes"  # Default search directory
+        file_structure = scan_directory(root_path)
+
+        # Sort files by modified timestamp (descending order)
+        sorted_files = sorted(file_structure["files"], key=lambda f: f[2], reverse=True)
+
+        self._report(
+            "Begin file list\n"
+            "{% for file, size, _ in files %}{{ file }} {{ size }} {{ file }}\n{% endfor %}"
+            "End file list\nok",
+            files=sorted_files
+        )
 
     def _get_long_path(self, arg_string: str) -> None:
         """Get the full path of a file."""
