@@ -214,6 +214,7 @@ class TFTAdapter:
         # Configuration values
         self.printer_info: Dict[str, Any] = {
             "machine_name": config.get("machine_name", "Klipper"),
+            "led_config_name": config.get('led_config_name'),
             "filament_sensor": f"filament_switch_sensor {config.get('filament_sensor_name')}"
         }
 
@@ -685,13 +686,12 @@ class TFTAdapter:
 
     def _set_led(self, **args: Dict[int]) -> None:
         """Set the LED color and brightness."""
-        # TODO: read led name from config_file
         red = args.get("arg_r", 0) / 255
         green = args.get("arg_u", 0) / 255
         blue = args.get("arg_b", 0) / 255
         white = args.get("arg_w", 0) / 255
         brightness = args.get("arg_p", 255) / 255
-        self._queue_task(f"SET_LED LED=statusled "
+        self._queue_task(f"SET_LED LED={self.printer_info.get('led_config_name')} "
                          f"RED={red * brightness:.3f} "
                          f"GREEN={green * brightness:.3f} "
                          f"BLUE={blue * brightness:.3f} "
