@@ -325,7 +325,8 @@ class TFTAdapter:
         while retries:
             try:
                 klippy_info = await self.klippy_apis.get_klippy_info()
-                self.printer_info.update({"firmware_name": "Marlin | Klipper " + klippy_info.get("software_version")})
+                self.printer_info.update(
+                    {"firmware_name": f"Marlin | Klipper {klippy_info.get('software_version')}"})
                 cfg_status = await self.klippy_apis.query_objects({"configfile": None})
             except self.server.error:
                 logging.exception("TFT initialization request failed")
@@ -338,17 +339,18 @@ class TFTAdapter:
         self.config_file: Dict[str, Any] = cfg_status.get("configfile", {}).get("config", {})
 
         # Make subscription request
-        sub_args: Dict[str, Optional[List[str]]] = {"gcode_move": None,
-                                                    "toolhead": None,
-                                                    "virtual_sdcard": None,
-                                                    "fan": None,
-                                                    "extruder": None,
-                                                    "bed_mesh": None,
-                                                    "heater_bed": None,
-                                                    "display_status": None,
-                                                    "print_stats": None,
-                                                    "probe": None,
-                                                    f"{self.printer_info.get('filament_sensor')}": None}
+        sub_args: Dict[str, Optional[List[str]]] = {
+            "gcode_move": None,
+            "toolhead": None,
+            "virtual_sdcard": None,
+            "fan": None,
+            "extruder": None,
+            "bed_mesh": None,
+            "heater_bed": None,
+            "display_status": None,
+            "print_stats": None,
+            "probe": None,
+            f"{self.printer_info.get('filament_sensor')}": None}
         try:
             self.object_status = await self.klippy_apis.query_objects(sub_args)
             await self.klippy_apis.subscribe_objects(sub_args, self._subcription_updates)
@@ -366,7 +368,8 @@ class TFTAdapter:
             self._bed_mesh_change()
         printer_state = data.get("print_stats", {}).get("state")
         if printer_state is not None:
-            self._print_status_change(printer_state, data.get(self.printer_info.get("filament_sensor")))
+            self._print_status_change(printer_state,
+                                      data.get(self.printer_info.get("filament_sensor")))
         display_status = data.get("display_status")
         if data.get("display_status") is not None:
             self._display_status_change(display_status)
@@ -891,7 +894,8 @@ class TFTAdapter:
     def _set_probe_offset(self, **args: Dict[float]) -> None:
         """Set the probe offsets."""
         if not args:
-            self._report(PROBE_OFFSET_TEMPLATE, **(self.object_status | {"config_file":self.config_file}))
+            self._report(PROBE_OFFSET_TEMPLATE, **(
+                self.object_status | {"config_file": self.config_file}))
         self.ser_conn.command("ok")
 
     def _load_filament(self) -> None:
