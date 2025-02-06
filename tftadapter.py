@@ -425,7 +425,7 @@ class TFTAdapter:
                     self._report(f"{PRINT_STATUS_TEMPLATE}", **self.object_status)
         elif printer_state == "paused":
             self.ser_conn.action("paused" if filament_detected else "paused filament_runout")
-        if printer_state in ("cancelled","complete"):
+        if printer_state in ("cancelled", "complete", "standby"):
             self.ser_conn.action("cancel" if printer_state == "cancelled" else "print_end")
             if self.print_status_report_task:
                 self.print_status_report_task.cancel()
