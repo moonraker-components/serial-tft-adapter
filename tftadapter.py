@@ -10,6 +10,7 @@ import time
 import logging
 import asyncio
 import re
+import math
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -40,9 +41,10 @@ if TYPE_CHECKING:
 
 PRINT_STATUS_TEMPLATE = (
     "//action:notification Layer Left "
-    "{{ (print_stats.info.current_layer or 0) }}/{{ (print_stats.info.total_layer or 0) }}\n"
+    "{{ (current_layer or 0) }}/{{ (total_layer or 0) }}\n"
     "//action:notification Data Left "
-    "{{ (virtual_sdcard.file_position or 0) }}/{{ (virtual_sdcard.file_size or 0) }}"
+    "{{ (virtual_sdcard.file_position or 0) }}/{{ (virtual_sdcard.file_size or 0) }}\n"
+    "M106 S{{ fan.speed * 255 | int }}"
 )
 
 TEMPERATURE_TEMPLATE = (
@@ -411,21 +413,14 @@ class TFTAdapter:
                     self.ser_conn.action("prompt_show")
             else:
                 self.ser_conn.action("print_start")
-
                 filename = self.object_status["print_stats"]["filename"]
                 metadata = self.file_manager.get_file_metadata(filename)
-                logging.info("metadata: %s", metadata)
                 estimated_time = metadata.get("estimated_time")
                 if estimated_time:
                     hours = int(estimated_time // 3600)
                     minutes = int((estimated_time % 3600) // 60)
                     seconds = int(estimated_time % 60)
                     self.ser_conn.notification(f"Time Left {hours:02}h{minutes:02}m{seconds:02}s")
-                layer_count = metadata.get("layer_count")
-                if layer_count:
-                    self._queue_task(
-                        f"SET_PRINT_STATS_INFO CURRENT_LAYER=1 TOTAL_LAYER={layer_count}")
-                    self._report(f"{PRINT_STATUS_TEMPLATE}", **self.object_status)
         elif printer_state == "paused":
             self.ser_conn.action("paused" if filament_detected else "paused filament_runout")
         if printer_state in ("cancelled", "complete", "standby"):
@@ -550,8 +545,7 @@ class TFTAdapter:
         except OSError as e:
             logging.exception("System error during command execution: %s", str(e))
         except Exception as e:
-            logging.exception("Critical error in command execution: %s "
-                "- This is unexpected and should be investigated", str(e))
+            logging.exception("Critical error in command execution: %s ", str(e))
 
     def handle_gcode_response(self, response: str) -> None:
         """Handle the response from a G-code command."""
@@ -593,42 +587,44 @@ class TFTAdapter:
         """Send report to tft."""
         self.ser_conn.command(Template(template).render(**data))
 
-    async def _autoreport(self, template, interval, **data):
+    async def _autoreport(self, template, interval, data_callback):
         """Send periodic reports based on the specified template."""
         while self.ser_conn.connected and interval > 0:
-            self._report(template, **data)
+            data = data_callback()
+            if data:
+                self._report(template, **data)
             await asyncio.sleep(interval)
 
-    def _set_autoreport(self, task_attr, template, arg_s: int) -> None:
-        """Set the interval for temperature reports."""
+    def _get_object_status(self):
+        return self.object_status
+
+    def _set_autoreport(self, task_attr, template, interval, data_callback=None):
+        """Set up an autoreporting task."""
+        if data_callback is None:
+            data_callback = self._get_object_status
+
         task = getattr(self, task_attr, None)
         if task:
             task.cancel()
-        if arg_s > 0:
-            task = self.event_loop.create_task(
-                self._autoreport(template,
-                                 arg_s,
-                                 **self.object_status))
+
+        if interval > 0:
+            task = self.event_loop.create_task(self._autoreport(template, interval, data_callback))
+
         setattr(self, task_attr, task)
         self.ser_conn.command("ok")
 
     def _set_temperature_autoreport(self, arg_s: int) -> None:
         """Set the interval for temperature reports."""
-        self._set_autoreport("temperature_report_task",
-                             f"ok {TEMPERATURE_TEMPLATE}",
-                             arg_s)
+        self._set_autoreport("temperature_report_task", f"ok {TEMPERATURE_TEMPLATE}", arg_s)
 
     def _set_position_autoreport(self, arg_s: int) -> None:
         """Set the interval for position reports."""
-        self._set_autoreport("position_report_task",
-                             POSITION_TEMPLATE,
-                             arg_s)
+        self._set_autoreport("position_report_task", POSITION_TEMPLATE, arg_s)
 
     def _set_print_status_autoreport(self, arg_s: Optional[int] = 3) -> None:
-        """Set the interval for print status reports."""
-        self._set_autoreport("print_status_report_task",
-                             PRINT_STATUS_TEMPLATE,
-                             arg_s)
+        """Set up automatic reporting of the print status."""
+        self._set_autoreport("print_status_report_task", PRINT_STATUS_TEMPLATE, arg_s,
+                             self._get_layer_info)
 
     def _clean_filename(self, filename: str) -> str:
         """Clean up the filename by removing unnecessary parts."""
@@ -659,6 +655,30 @@ class TFTAdapter:
         self.object_status["print_stats"]["filename"] = self._clean_filename(arg_string)
         logging.info("arg_string: %s", self.object_status["print_stats"]["filename"])
         self.ser_conn.command(f"File opened:{arg_string} Size:{size}\nFile selected\nok")
+
+    def _get_layer_info(self) -> tuple[int, int]:
+        """Calculate max layers and current layer in the print."""
+        print_stats = self.object_status.get("print_stats", {})
+        metadata = self.file_manager.get_file_metadata(print_stats.get("filename", ""))
+
+        total_layer = print_stats.get("info", {}).get("total_layer") or metadata.get("layer_count")
+        first_layer_height = metadata.get("first_layer_height")
+        layer_height = metadata.get("layer_height")
+        object_height = metadata.get("object_height")
+
+        if (total_layer is None and
+            all(v is not None for v in [first_layer_height, layer_height, object_height])):
+            total_layer = math.ceil((object_height - first_layer_height) / layer_height + 1) or 0
+
+        current_layer = (print_stats.get("info", {}).get("current_layer")
+                         if print_stats.get("print_duration", 0) > 0 else 0)
+        if current_layer is None and first_layer_height is not None and layer_height is not None:
+            current_layer = math.ceil(
+                (self.object_status.get("gcode_move", {}).get("gcode_position", [0, 0, 0])[2]
+                - first_layer_height) / layer_height + 1) or 0
+
+        return (self.object_status |
+                {"current_layer": min(current_layer, total_layer), "total_layer": total_layer})
 
     def _start_print(self) -> None:
         """Start printing the selected file."""
