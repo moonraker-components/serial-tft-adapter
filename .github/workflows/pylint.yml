@@ -16,6 +16,6 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
     - name: Check code
-      uses: advanced-security/python-lint-code-scanning-action@v1
+      uses: advanced-security/python-lint-code-scanning-action@v1.1.1
       with:
         linter: ${{ matrix.linter }}
