@@ -6,5 +6,5 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - name: Python Linter
-        uses: jiwidi/python-lint-action@main
+      - uses: actions/checkout@v3
+      - uses: weibullguy/python-lint-plus@v1.11.0
