@@ -5,9 +5,6 @@ on: [push]
 jobs:
   lint:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        linter: [flake8, pylint, ruff, mypy, pytype, pyright, fixit, pyre]
     steps:
       - name: Python Linter
         uses: jiwidi/python-lint-action@main
