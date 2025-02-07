@@ -9,6 +9,5 @@ jobs:
       matrix:
         linter: [flake8, pylint, ruff, mypy, pytype, pyright, fixit, pyre]
     steps:
-      - uses: advanced-security/python-lint-code-scanning-action@v1.1.1
-        with:
-          linter: ${{ matrix.linter }}
+      - name: Python Linter
+        uses: jiwidi/python-lint-action@main
