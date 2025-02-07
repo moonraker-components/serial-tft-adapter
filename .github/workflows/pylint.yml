@@ -1,21 +1,14 @@
-name: Pylint
+name: Linters
 
 on: [push]
 
 jobs:
-  build:
+  lint:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.9"]
         linter: [flake8, pylint, ruff, mypy, pytype, pyright, fixit, pyre]
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v3
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Check code
-      uses: advanced-security/python-lint-code-scanning-action@v1.1.1
-      with:
-        linter: ${{ matrix.linter }}
+      - uses: advanced-security/python-lint-code-scanning-action@v1
+        with:
+          linter: ${{ matrix.linter }}
