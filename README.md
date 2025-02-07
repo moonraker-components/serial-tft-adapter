@@ -11,7 +11,7 @@ This project provides an adapter for integrating TFT displays with Klipper firmw
     ```
 2. Add a link to `tftadapter.py` in the Moonraker components folder:
     ```sh
-    ln -s ~/serial-tft-adapter/tftadapter.py ~/moonraker/moonraker/components/tftadapter.py
+    ln -s ~/serial-tft-adapter/components/tftadapter.py ~/moonraker/moonraker/components/tftadapter.py
     ```
 3. Configure the `tftadapter` in your Moonraker configuration file:
     ```ini
@@ -22,7 +22,8 @@ This project provides an adapter for integrating TFT displays with Klipper firmw
     filament_sensor_name: filament_sensor
     led_config_name: statusled
     ```
-4. Enable automatic updates for the Serial TFT Moonraker Adapter by adding the following configuration to your Moonraker configuration file:
+4. Enable automatic updates for the Serial TFT Moonraker Adapter by adding the following configuration
+to your Moonraker configuration file:
     ```ini
     [update_manager serial-tft-adapter]
     type: git_repo
