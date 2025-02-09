@@ -926,12 +926,19 @@ class TFTAdapter:
         """Unload filament from the extruder."""
         self._handle_filament(length= -25)
 
-    def _handle_filament(self, length: int, extruder: float = 0, zmove: float = 10) -> None:
+    def _handle_filament(self, length: int, extruder: float = 0, zmove: float = 20) -> None:
         """Handle filament loading and unloading."""
-        self._queue_task(["G91",                             # Relative Positioning
-                          f"G92 E{extruder}",                # Reset Extruder
-                          f"G1 Z{zmove} E{length} F{3*60}",  # Extrude or Retract
-                          "G92 E0"])                         # Reset Extruder
+        scripts = []
+        if not "xyz" in self.object_status.get("toolhead").get("homed_axes"):
+            scripts = ["G28"]                     # Home if not homed
+        scripts.extend(["G90",                    # Absolute Positioning
+                        f"G92 E{extruder}"])      # Reset Extruder
+        if self.object_status.get("gcode_move", {}).get("gcode_position", [0, 0, 0])[2] < zmove:
+            scripts.append(f"G1 F6000 Z{zmove}")  # Raise head if under zmove
+        scripts.extend([f"G1 E{length} F{3*60}",  # Extrude or Retract
+                        "G92 E0",                 # Relative Positioning
+                        "G92 E0"])                # Reset Extruder
+        self._queue_task(scripts)
 
     def _set_feed_rate(self, arg_s: Optional[int] = None, **_: Any) -> None:
         """Set the feed rate."""
