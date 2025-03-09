@@ -650,11 +650,10 @@ class TFTAdapter:
 
     def _select_sd_file(self, arg_string: str) -> None:
         """Select an SD file for printing."""
-        logging.info(f"arg_string: {arg_string}")
-        size = 1683039
-        self.object_status["print_stats"]["filename"] = self._clean_filename(arg_string)
-        logging.info("arg_string: %s", self.object_status["print_stats"]["filename"])
-        self.ser_conn.command(f"File opened:{arg_string} Size:{size}\nFile selected\nok")
+        file_to_print = arg_string.replace('[:space:]', ' ')
+        file_size = self.file_manager.get_file_metadata(file_to_print).get("size")
+        self.object_status["print_stats"]["filename"] = self._clean_filename(file_to_print)
+        self.ser_conn.command(f"File opened:{file_to_print} Size:{file_size}\nFile selected\nok")
 
     def _get_layer_info(self) -> tuple[int, int]:
         """Calculate max layers and current layer in the print."""
@@ -847,7 +846,7 @@ class TFTAdapter:
 
         self._report(
             "Begin file list\n"
-            "{% for file, size, _ in files %}{{ file }} {{ size }} {{ file }}\n{% endfor %}"
+            "{% for file, size, _ in files %}{{ file | replace(' ','[:space:]') }} {{ size }} {{ file }}\n{% endfor %}"
             "End file list\nok",
             files=sorted_files
         )
