@@ -403,6 +403,7 @@ class TFTAdapter:
         filament_detected = None
         if filament_sensor:
             filament_detected = filament_sensor["filament_detected"]
+            logging.info("filament_detected: %s", filament_detected)
         if printer_state == "printing":
             if self.last_printer_state == "paused":
                 self.ser_conn.action("resume")
