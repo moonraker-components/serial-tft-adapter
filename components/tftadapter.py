@@ -361,19 +361,19 @@ class TFTAdapter:
         except self.server.error:
             logging.exception("Unable to complete subscription request")
 
-    def _subcription_updates(self, data: Dict[str, Any], _: float) -> None:
+    def _subcription_updates(self, data_update: Dict[str, Any], _: float) -> None:
         """Update printer states values."""
-        for key, values in data.items():
+        for key, values in data_update.items():
             if key in self.object_status:
                 self.object_status[key].update(values)
-        if data.get("bed_mesh") is not None:
+        if data_update.get("bed_mesh") is not None:
             self._bed_mesh_change()
-        printer_state = data.get("print_stats", {}).get("state")
+        printer_state = data_update.get("print_stats", {}).get("state")
         if printer_state is not None:
             self._print_status_change(printer_state,
-                                      data.get(self.printer_info.get("filament_sensor")))
-        display_status = data.get("display_status")
-        if data.get("display_status") is not None:
+                                      self.object_status.get(self.printer_info.get("filament_sensor")))
+        display_status = data_update.get("display_status")
+        if data_update.get("display_status") is not None:
             self._display_status_change(display_status)
 
     def _display_status_change(self, display_status: Dict[str, Any]) -> None:
@@ -403,7 +403,8 @@ class TFTAdapter:
         filament_detected = None
         if filament_sensor:
             filament_detected = filament_sensor["filament_detected"]
-            logging.info("filament_detected: %s", filament_detected)
+        logging.info("filament_sensor: %s", filament_sensor)
+        logging.info("filament_detected: %s", filament_detected)
         if printer_state == "printing":
             if self.last_printer_state == "paused":
                 self.ser_conn.action("resume")
@@ -861,7 +862,8 @@ class TFTAdapter:
         filament_sensor=self.object_status.get(self.printer_info.get("filament_sensor"), {})
         state = { "state": "On" if filament_sensor.get("enabled", False) else "Off"}
         self._report("Soft endstops: {{ state }}\nok", **state)
-        self._print_status_change(self.object_status.get("print_stats", {}).get("state"), None)
+        self._print_status_change(self.object_status.get("print_stats", {}).get("state"),
+                                  self.object_status.get(self.printer_info.get("filament_sensor")))
 
     def _report_settings(self, **_: Any) -> None:
         """Report the printer settings."""
