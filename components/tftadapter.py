@@ -136,6 +136,7 @@ class SerialConnection:
         self.attempting_connect = True
         start_time = time.time()
         connect_time = start_time
+        borrar = ""
 
         while not self.connected:
             if connect_time > start_time + 30:
@@ -632,7 +633,7 @@ class TFTAdapter:
         """Clean up the filename by removing unnecessary parts."""
         logging.info("original filename: %s", filename)
         # Remove quotes and whitespace
-        filename.strip(" \"\t\n")
+        # filename.strip(" \"\t\n")
         # if filename.startswith("/"):
         #     filename = filename[1:]
         # Remove drive number
