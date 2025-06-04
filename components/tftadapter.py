@@ -136,6 +136,7 @@ class SerialConnection:
         self.attempting_connect = True
         start_time = time.time()
         connect_time = start_time
+        borrar = ""
 
         while not self.connected:
             if connect_time > start_time + 30:
