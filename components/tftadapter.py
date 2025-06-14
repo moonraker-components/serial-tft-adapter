@@ -334,7 +334,6 @@ class TFTAdapter:
 
     async def _process_klippy_ready(self) -> None:
         """Handle the event when Klippy is ready."""
-        # Request "info" and "configfile" status
         retries = 10
         cfg_status: Dict[str, Any] = {}
         while retries:
