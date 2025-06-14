@@ -214,10 +214,16 @@ class TFTAdapter:
         self.queue: List[Union[str, Tuple[FlexCallback, Any]]] = []
         self.last_printer_state: str = None
 
+        db: MoonrakerDatabase = self.server.lookup_component("database")
+        sync_provider = db.get_provider_wrapper()
+        mainsail_info: Dict[str, Any]
+        mainsail_info = sync_provider.get_item("mainsail", "general", {})
+        self.printer_name = mainsail_info.get("printername", "Klipper")
+
         # Configuration values
         self.printer_info: Dict[str, Any] = {
-            "led_config": None,
-            "filament_sensor": None
+            "neopixel": None,
+            "filament_switch_sensor": None
         }
 
         # Report tasks
@@ -329,9 +335,9 @@ class TFTAdapter:
                 objects = await self.klippy_apis.get_object_list(default=[])
                 for object in objects:
                     if "neopixel" in object:
-                        self.printer_info.update({"led_config": object})
+                        self.printer_info.update({"neopixel": object})
                     if "filament_switch_sensor" in object:
-                        self.printer_info.update({"filament_sensor": object})
+                        self.printer_info.update({"filament_switch_sensor": object})
                 klippy_info = await self.klippy_apis.get_klippy_info()
                 self.printer_info.update(
                     {"firmware_name": f"Marlin | Klipper {klippy_info.get('software_version')}"})
@@ -359,9 +365,9 @@ class TFTAdapter:
             "print_stats": None,
             "probe": None
         }
-        filament_sensor = self.printer_info.get('filament_sensor')
-        if filament_sensor:
-            sub_args[filament_sensor] = None
+        filament_switch_sensor = self.printer_info.get('filament_switch_sensor')
+        if filament_switch_sensor:
+            sub_args[filament_switch_sensor] = None
         try:
             self.object_status = await self.klippy_apis.query_objects(sub_args)
             await self.klippy_apis.subscribe_objects(sub_args, self._subcription_updates)
@@ -380,7 +386,7 @@ class TFTAdapter:
         printer_state = data_update.get("print_stats", {}).get("state")
         if printer_state is not None:
             self._print_status_change(printer_state,
-                                      self.object_status.get(self.printer_info.get("filament_sensor"), None))
+                                      self.object_status.get(self.printer_info.get("filament_switch_sensor"), None))
         display_status = data_update.get("display_status")
         if data_update.get("display_status") is not None:
             self._display_status_change(display_status)
@@ -719,7 +725,7 @@ class TFTAdapter:
 
     def _set_led(self, **args: Dict[int]) -> None:
         """Set the LED color and brightness."""
-        if not self.printer_info.get("led_config"):
+        if not self.printer_info.get("neopixel"):
             logging.warning("LED configuration name not set, skipping LED command")
             return
         red = args.get("arg_r", 0) / 255
@@ -727,7 +733,7 @@ class TFTAdapter:
         blue = args.get("arg_b", 0) / 255
         white = args.get("arg_w", 0) / 255
         brightness = args.get("arg_p", 255) / 255
-        self._queue_task(f"SET_LED LED={self.printer_info.get('led_config').split()[1]} "
+        self._queue_task(f"SET_LED LED={self.printer_info.get('neopixel').split()[1]} "
                          f"RED={red * brightness:.3f} "
                          f"GREEN={green * brightness:.3f} "
                          f"BLUE={blue * brightness:.3f} "
@@ -869,7 +875,7 @@ class TFTAdapter:
 
     def _report_software_endstops(self) -> None:
         """Report the status of software endstops."""
-        filament_state = self.object_status.get(self.printer_info.get("filament_sensor"), None)
+        filament_state = self.object_status.get(self.printer_info.get("filament_switch_sensor"), None)
         state = {"state": "On" if filament_state and filament_state.get("enabled", False) else "Off"}
         self._report("Soft endstops: {{ state }}\nok", **state)
         self._print_status_change(self.object_status.get("print_stats", {}).get("state"), filament_state)
@@ -977,14 +983,9 @@ class TFTAdapter:
 
     def _report_firmware_info(self) -> None:
         """Report the firmware information."""
-        db: MoonrakerDatabase = self.server.lookup_component("database")
-        sync_provider = db.get_provider_wrapper()
-        mainsail_info: Dict[str, Any]
-        mainsail_info = sync_provider.get_item("mainsail", "general", {})
-        printer_name = mainsail_info.get("printername", "Klipper")
         self._report(FIRMWARE_INFO_TEMPLATE, **(
             self.object_status |
-            {"machine_name": printer_name} |
+            {"machine_name": self.printer_name} |
             {"firmware_name": self.printer_info.get("firmware_name")}))
 
     def _z_offset_apply_probe(self) -> List[str]:
