@@ -218,10 +218,10 @@ class TFTAdapter:
         sync_provider = db.get_provider_wrapper()
         mainsail_info: Dict[str, Any]
         mainsail_info = sync_provider.get_item("mainsail", "general", {})
+        self.printer_name = mainsail_info.get("printername", "Klipper")
 
         # Configuration values
         self.printer_info: Dict[str, Any] = {
-            "machine_name": mainsail_info.get("printername", "Klipper"),
             "led_config": None,
             "filament_sensor": None
         }
@@ -333,14 +333,12 @@ class TFTAdapter:
         while retries:
             try:
                 objects = await self.klippy_apis.get_object_list(default=[])
-                # Log the full object name for neopixel and filament_switch_sensor
                 for object in objects:
                     if "neopixel" in object:
-                        self.printer_info["led_config"] = object.split()[1]
+                        self.printer_info.update({"led_config": object})
                     if "filament_switch_sensor" in object:
-                        self.printer_info["filament_sensor"] = object
+                        self.printer_info.update({"filament_sensor": object})
                 klippy_info = await self.klippy_apis.get_klippy_info()
-                logging.info("Klippy Info: %s", klippy_info)
                 self.printer_info.update(
                     {"firmware_name": f"Marlin | Klipper {klippy_info.get('software_version')}"})
                 cfg_status = await self.klippy_apis.query_objects({"configfile": None})
@@ -727,7 +725,7 @@ class TFTAdapter:
 
     def _set_led(self, **args: Dict[int]) -> None:
         """Set the LED color and brightness."""
-        if self.printer_info.get("led_config") is None:
+        if not self.printer_info.get("led_config"):
             logging.warning("LED configuration name not set, skipping LED command")
             return
         red = args.get("arg_r", 0) / 255
@@ -735,7 +733,7 @@ class TFTAdapter:
         blue = args.get("arg_b", 0) / 255
         white = args.get("arg_w", 0) / 255
         brightness = args.get("arg_p", 255) / 255
-        self._queue_task(f"SET_LED LED={self.printer_info.get('led_config')} "
+        self._queue_task(f"SET_LED LED={self.printer_info.get('led_config').split[1]} "
                          f"RED={red * brightness:.3f} "
                          f"GREEN={green * brightness:.3f} "
                          f"BLUE={blue * brightness:.3f} "
@@ -987,7 +985,7 @@ class TFTAdapter:
         """Report the firmware information."""
         self._report(FIRMWARE_INFO_TEMPLATE, **(
             self.object_status |
-            {"machine_name": self.printer_info.get("machine_name")} |
+            {"machine_name": self.printer_name} |
             {"firmware_name": self.printer_info.get("firmware_name")}))
 
     def _z_offset_apply_probe(self) -> List[str]:
