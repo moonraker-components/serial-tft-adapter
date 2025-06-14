@@ -327,13 +327,10 @@ class TFTAdapter:
 
     async def get_item(self, item: Any) -> dict:
         """Retrieve an item from the Klippy object list."""
-        logging.info("Searching for item: %s", item)
         objects = await self.klippy_apis.get_object_list(default=[])
         for object in objects:
             if item in object:
-                logging.info("Found item %s in object: %s", item, object)
                 return object
-        return
 
     async def _process_klippy_ready(self) -> None:
         """Handle the event when Klippy is ready."""
