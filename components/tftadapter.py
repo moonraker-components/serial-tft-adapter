@@ -342,7 +342,6 @@ class TFTAdapter:
                 continue
             break
         self.printer_cfg: Dict[str, Any] = cfg_status.get("configfile", {}).get("config", {})
-        logging.info("Printer configuration: %s", self.printer_cfg)
 
         # Make subscription request
         sub_args: Dict[str, Optional[List[str]]] = {
@@ -720,6 +719,8 @@ class TFTAdapter:
         if self.printer_info.get("led_config_name") is None:
             logging.warning("LED configuration name not set, skipping LED command")
             return
+        logging.info("Printer configuration name: %s",
+                     self.printer_cfg)
         red = args.get("arg_r", 0) / 255
         green = args.get("arg_u", 0) / 255
         blue = args.get("arg_b", 0) / 255
