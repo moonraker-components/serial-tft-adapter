@@ -733,7 +733,7 @@ class TFTAdapter:
         blue = args.get("arg_b", 0) / 255
         white = args.get("arg_w", 0) / 255
         brightness = args.get("arg_p", 255) / 255
-        self._queue_task(f"SET_LED LED={self.printer_info.get('led_config').split[1]} "
+        self._queue_task(f"SET_LED LED={self.printer_info.get('led_config').split()[1]} "
                          f"RED={red * brightness:.3f} "
                          f"GREEN={green * brightness:.3f} "
                          f"BLUE={blue * brightness:.3f} "
