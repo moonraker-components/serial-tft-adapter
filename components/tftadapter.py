@@ -78,10 +78,10 @@ REPORT_SETTINGS_TEMPLATE = (
 )
 
 FIRMWARE_INFO_TEMPLATE = (
-    "FIRMWARE_NAME:Marlin | Klipper {{ firmware_name }} "
+    "FIRMWARE_NAME:Marlin | Klipper {{ software_version }} "
     "SOURCE_CODE_URL:https://github.com/Klipper3d/klipper "
     "PROTOCOL_VERSION:1.0 "
-    "MACHINE_TYPE:{{ machine_name }}\n"
+    "MACHINE_TYPE:{{ printername }}\n"
     "Auto Bed Leveling\n"
     "Cap:EXTRUDER_COUNT:1\n"
     "Cap:EEPROM:1\n"
@@ -205,6 +205,9 @@ class TFTAdapter:
         self.event_loop = self.server.get_event_loop()
         self.file_manager: FileManager = self.server.lookup_component("file_manager")
         self.klippy_apis: KlippyAPI = self.server.lookup_component("klippy_apis")
+        database: MoonrakerDatabase = self.server.lookup_component("database")
+        sync_provider = database.get_provider_wrapper()
+        mainsail_info = sync_provider.get_item("mainsail", "general", {})
 
         # Basic state
         self.object_status: Dict[str, Dict[str, Any]] = {}
@@ -214,14 +217,9 @@ class TFTAdapter:
         self.queue: List[Union[str, Tuple[FlexCallback, Any]]] = []
         self.last_printer_state: str = None
 
-        db: MoonrakerDatabase = self.server.lookup_component("database")
-        sync_provider = db.get_provider_wrapper()
-        mainsail_info: Dict[str, Any]
-        mainsail_info = sync_provider.get_item("mainsail", "general", {})
-        self.printer_name = mainsail_info.get("printername", "Klipper")
-
         # Configuration values
         self.printer_info: Dict[str, Any] = {
+            "printername": mainsail_info.get("printername", "Klipper"),
             "neopixel": None,
             "filament_switch_sensor": None
         }
@@ -985,8 +983,8 @@ class TFTAdapter:
         """Report the firmware information."""
         self._report(FIRMWARE_INFO_TEMPLATE, **(
             self.object_status |
-            {"machine_name": self.printer_name} |
-            {"firmware_name": self.printer_info.get("software_version")}))
+            {"printername": self.printer_info.get("printername")} |
+            {"software_version": self.printer_info.get("software_version")}))
 
     def _z_offset_apply_probe(self) -> List[str]:
         """Apply the Z offset from the probe."""
