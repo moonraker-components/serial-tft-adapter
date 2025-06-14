@@ -216,9 +216,12 @@ class TFTAdapter:
         # Configuration values
         self.printer_info: Dict[str, Any] = {
             "machine_name": config.get("machine_name", "Klipper"),
-            "led_config_name": config.get('led_config_name'),
-            "filament_sensor": f"filament_switch_sensor {config.get('filament_sensor_name')}"
+            "led_config_name": config.get('led_config_name', None),
+            "filament_sensor": None
         }
+        filament_sensor_name = config.get('filament_sensor_name', None)
+        if filament_sensor_name:
+            self.printer_info["filament_sensor"] = f"filament_sensor_name {filament_sensor_name}"
 
         # Report tasks
         self.temperature_report_task: Optional[asyncio.Task] = None
@@ -351,8 +354,11 @@ class TFTAdapter:
             "heater_bed": None,
             "display_status": None,
             "print_stats": None,
-            "probe": None,
-            f"{self.printer_info.get('filament_sensor')}": None}
+            "probe": None
+        }
+        filament_sensor = self.printer_info.get('filament_sensor')
+        if filament_sensor:
+            sub_args[filament_sensor] = None
         try:
             self.object_status = await self.klippy_apis.query_objects(sub_args)
             await self.klippy_apis.subscribe_objects(sub_args, self._subcription_updates)
@@ -371,7 +377,7 @@ class TFTAdapter:
         printer_state = data_update.get("print_stats", {}).get("state")
         if printer_state is not None:
             self._print_status_change(printer_state,
-                                      self.object_status.get(self.printer_info.get("filament_sensor")))
+                                      self.object_status.get(self.printer_info.get("filament_sensor"), None))
         display_status = data_update.get("display_status")
         if data_update.get("display_status") is not None:
             self._display_status_change(display_status)
@@ -397,13 +403,13 @@ class TFTAdapter:
 
     def _print_status_change(self,
                              printer_state: Dict[str, Any],
-                             filament_sensor: Dict[str, Any]) -> None:
+                             filament_state: Dict[str, Any]) -> None:
         """Process print status changes."""
         logging.info("Previous printer state: %s", self.last_printer_state)
         filament_detected = None
-        if filament_sensor:
-            filament_detected = filament_sensor["filament_detected"]
-        logging.info("filament_sensor: %s", filament_sensor)
+        if filament_state:
+            filament_detected = filament_state["filament_detected"]
+        logging.info("filament_state: %s", filament_state)
         logging.info("filament_detected: %s", filament_detected)
         if printer_state == "printing":
             if self.last_printer_state == "paused":
@@ -710,6 +716,9 @@ class TFTAdapter:
 
     def _set_led(self, **args: Dict[int]) -> None:
         """Set the LED color and brightness."""
+        if self.printer_info.get("led_config_name") is None:
+            logging.warning("LED configuration name not set, skipping LED command")
+            return
         red = args.get("arg_r", 0) / 255
         green = args.get("arg_u", 0) / 255
         blue = args.get("arg_b", 0) / 255
@@ -859,11 +868,10 @@ class TFTAdapter:
 
     def _report_software_endstops(self) -> None:
         """Report the status of software endstops."""
-        filament_sensor=self.object_status.get(self.printer_info.get("filament_sensor"), {})
-        state = { "state": "On" if filament_sensor.get("enabled", False) else "Off"}
+        filament_state = self.object_status.get(self.printer_info.get("filament_sensor"), None)
+        state = {"state": "On" if filament_state and filament_state.get("enabled", False) else "Off"}
         self._report("Soft endstops: {{ state }}\nok", **state)
-        self._print_status_change(self.object_status.get("print_stats", {}).get("state"),
-                                  self.object_status.get(self.printer_info.get("filament_sensor")))
+        self._print_status_change(self.object_status.get("print_stats", {}).get("state"), filament_state)
 
     def _report_settings(self, **_: Any) -> None:
         """Report the printer settings."""
