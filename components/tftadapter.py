@@ -214,12 +214,6 @@ class TFTAdapter:
         self.queue: List[Union[str, Tuple[FlexCallback, Any]]] = []
         self.last_printer_state: str = None
 
-        db: MoonrakerDatabase = self.server.lookup_component("database")
-        sync_provider = db.get_provider_wrapper()
-        mainsail_info: Dict[str, Any]
-        mainsail_info = sync_provider.get_item("mainsail", "general", {})
-        self.printer_name = mainsail_info.get("printername", "Klipper")
-
         # Configuration values
         self.printer_info: Dict[str, Any] = {
             "led_config": None,
@@ -983,9 +977,14 @@ class TFTAdapter:
 
     def _report_firmware_info(self) -> None:
         """Report the firmware information."""
+        db: MoonrakerDatabase = self.server.lookup_component("database")
+        sync_provider = db.get_provider_wrapper()
+        mainsail_info: Dict[str, Any]
+        mainsail_info = sync_provider.get_item("mainsail", "general", {})
+        printer_name = mainsail_info.get("printername", "Klipper")
         self._report(FIRMWARE_INFO_TEMPLATE, **(
             self.object_status |
-            {"machine_name": self.printer_name} |
+            {"machine_name": printer_name} |
             {"firmware_name": self.printer_info.get("firmware_name")}))
 
     def _z_offset_apply_probe(self) -> List[str]:
