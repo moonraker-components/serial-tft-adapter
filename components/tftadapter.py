@@ -78,7 +78,7 @@ REPORT_SETTINGS_TEMPLATE = (
 )
 
 FIRMWARE_INFO_TEMPLATE = (
-    "FIRMWARE_NAME:{{ firmware_name }} "
+    "FIRMWARE_NAME:Marlin | Klipper {{ firmware_name }} "
     "SOURCE_CODE_URL:https://github.com/Klipper3d/klipper "
     "PROTOCOL_VERSION:1.0 "
     "MACHINE_TYPE:{{ machine_name }}\n"
@@ -325,6 +325,16 @@ class TFTAdapter:
         """Initialize the component."""
         await self.ser_conn.connect()
 
+    async def get_item(self, item: Any) -> dict:
+        """Retrieve an item from the Klippy object list."""
+        logging.info("Searching for item: %s", item)
+        objects = await self.klippy_apis.get_object_list(default=[])
+        for object in objects:
+            if item in object:
+                logging.info("Found item %s in object: %s", item, object)
+                return object
+        return
+
     async def _process_klippy_ready(self) -> None:
         """Handle the event when Klippy is ready."""
         # Request "info" and "configfile" status
@@ -332,15 +342,10 @@ class TFTAdapter:
         cfg_status: Dict[str, Any] = {}
         while retries:
             try:
-                objects = await self.klippy_apis.get_object_list(default=[])
-                for object in objects:
-                    if "neopixel" in object:
-                        self.printer_info.update({"neopixel": object})
-                    if "filament_switch_sensor" in object:
-                        self.printer_info.update({"filament_switch_sensor": object})
+                self.printer_info.update({"neopixel": await self.get_item("neopixel")})
+                self.printer_info.update({"filament_switch_sensor": await self.get_item("filament_switch_sensor")})
                 klippy_info = await self.klippy_apis.get_klippy_info()
-                self.printer_info.update(
-                    {"firmware_name": f"Marlin | Klipper {klippy_info.get('software_version')}"})
+                self.printer_info.update({"software_version": klippy_info.get("software_version")})
                 cfg_status = await self.klippy_apis.query_objects({"configfile": None})
             except self.server.error:
                 logging.exception("TFT initialization request failed")
@@ -986,7 +991,7 @@ class TFTAdapter:
         self._report(FIRMWARE_INFO_TEMPLATE, **(
             self.object_status |
             {"machine_name": self.printer_name} |
-            {"firmware_name": self.printer_info.get("firmware_name")}))
+            {"firmware_name": self.printer_info.get("software_version")}))
 
     def _z_offset_apply_probe(self) -> List[str]:
         """Apply the Z offset from the probe."""
