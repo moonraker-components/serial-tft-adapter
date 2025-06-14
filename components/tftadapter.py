@@ -5,12 +5,17 @@ handling serial communication, command processing, and status reporting.
 """
 
 from __future__ import annotations
+import serial
 import os
 import time
 import logging
 import asyncio
 import re
 import math
+from jinja2 import Template
+from ..utils import ServerError
+
+# Annotation imports
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -22,14 +27,6 @@ from typing import (
     Coroutine,
     Union,
 )
-try:
-    import serial
-    from jinja2 import Template
-except ImportError:
-    logging.error("Missing required dependencies: pyserial and/or jinja2")
-    raise
-
-from ..utils import ServerError
 
 # Annotation imports
 if TYPE_CHECKING:
@@ -54,26 +51,26 @@ TEMPERATURE_TEMPLATE = (
 )
 
 PROBE_OFFSET_TEMPLATE = (
-    "M851 X{{ config_file.bltouch.x_offset | float - gcode_move.homing_origin[0] }} "
-    "Y{{ config_file.bltouch.y_offset | float - gcode_move.homing_origin[1] }} "
-    "Z{{ config_file.bltouch.z_offset | float - gcode_move.homing_origin[2] }}"
+    "M851 X{{ config.bltouch.x_offset | float - gcode_move.homing_origin[0] }} "
+    "Y{{ config.bltouch.y_offset | float - gcode_move.homing_origin[1] }} "
+    "Z{{ config.bltouch.z_offset | float - gcode_move.homing_origin[2] }}"
 )
 
 REPORT_SETTINGS_TEMPLATE = (
     "M203 X{{ toolhead.max_velocity }} Y{{ toolhead.max_velocity }} "
-    "Z{{ config_file.printer.max_z_velocity }} E{{ extruder.max_extrude_only_velocity }}\n"
+    "Z{{ config.printer.max_z_velocity }} E{{ extruder.max_extrude_only_velocity }}\n"
     "M201 X{{ toolhead.max_accel }} Y{{ toolhead.max_accel }} "
-    "Z{{ config_file.printer.max_z_accel }} E{{ extruder.max_extrude_only_accel }}\n"
+    "Z{{ config.printer.max_z_accel }} E{{ extruder.max_extrude_only_accel }}\n"
     "M206 X{{ gcode_move.homing_origin[0] }} "
          "Y{{ gcode_move.homing_origin[1] }} "
          "Z{{ gcode_move.homing_origin[2] }}\n"
     f"{PROBE_OFFSET_TEMPLATE}\n"
-    "M420 S1 Z{{ config_file.bed_mesh.fade_end }}\n"
+    "M420 S1 Z{{ config.bed_mesh.fade_end }}\n"
     "M106 S{{ fan.speed * 255 | int }}\n"
     "work:{min:{x:0,y:0,z:0},"
-          "max:{x:{{ config_file.stepper_x.position_max }},"
-               "y:{{ config_file.stepper_y.position_max }},"
-               "z:{{ config_file.stepper_z.position_max }}}}"
+          "max:{x:{{ config.stepper_x.position_max }},"
+               "y:{{ config.stepper_y.position_max }},"
+               "z:{{ config.stepper_z.position_max }}}}"
 )
 
 FIRMWARE_INFO_TEMPLATE = (
@@ -119,12 +116,15 @@ PROBE_ACCURACY_TEMPLATE = (
 class SerialConnection:
     """Manages the serial connection to the TFT."""
 
-    def __init__(self, config_file: ConfigHelper, tft: TFTAdapter) -> None:
+    def __init__(self,
+                 config: ConfigHelper,
+                 tftadapter: TFTAdapter
+                 ) -> None:
         """Initialize the serial connection."""
-        self.event_loop = config_file.get_server().get_event_loop()
-        self.tft = tft
-        self.port: str = config_file.get("serial")
-        self.baud = config_file.getint("baud", 57600)
+        self.event_loop = config.get_server().get_event_loop()
+        self.tftadapter = tftadapter
+        self.port: str = config.get("serial")
+        self.baud = config.getint("baud", 57600)
         self.serial: Optional[serial.Serial] = None
         self.file_descriptor: Optional[int] = None
         self.connected = False
@@ -156,7 +156,7 @@ class SerialConnection:
             os.set_blocking(self.file_descriptor, False)
             self.event_loop.add_reader(
                 self.file_descriptor,
-                self.tft.handle_incoming
+                self.tftadapter.handle_incoming
             )
             self.connected = True
             logging.info("TFT Connected")
@@ -193,21 +193,21 @@ class SerialConnection:
 class TFTAdapter:
     """Adapter for managing the TFT display."""
 
-    def __init__(self, config: ConfigHelper) -> None:
+    def __init__(self, tft_config: ConfigHelper) -> None:
         """Initialize the TFT adapter.
 
         Args:
-            config: Configuration helper instance
+            tft_config: Configuration helper instance
         """
         # Initialize all attributes in __init__
-        self.server = config.get_server()
+        self.server = tft_config.get_server()
         self.event_loop = self.server.get_event_loop()
         self.file_manager: FMComp = self.server.lookup_component("file_manager")
         self.klippy_apis: APIComp = self.server.lookup_component("klippy_apis")
 
         # Basic state
         self.object_status: Dict[str, Dict[str, Any]] = {}
-        self.config_file: Dict[str, Any] = {}
+        self.config: Dict[str, Any] = {}
         self.is_ready: bool = False
         self.is_busy: bool = False
         self.queue: List[Union[str, Tuple[FlexCallback, Any]]] = []
@@ -215,9 +215,9 @@ class TFTAdapter:
 
         # Configuration values
         self.printer_info: Dict[str, Any] = {
-            "machine_name": config.get("machine_name", "Klipper"),
-            "led_config_name": config.get('led_config_name'),
-            "filament_sensor": f"filament_switch_sensor {config.get('filament_sensor_name')}"
+            "machine_name": tft_config.get("machine_name", "Klipper"),
+            "led_config_name": tft_config.get('led_config_name'),
+            "filament_sensor": f"filament_switch_sensor {tft_config.get('filament_sensor_name')}"
         }
 
         # Report tasks
@@ -226,7 +226,7 @@ class TFTAdapter:
         self.print_status_report_task: Optional[asyncio.Task] = None
 
         # Serial connection
-        self.ser_conn = SerialConnection(config, self)
+        self.ser_conn = SerialConnection(tft_config, self)
 
         # Initialize command handlers
         self.direct_gcodes: Dict[str, FlexCallback] = {
@@ -283,11 +283,14 @@ class TFTAdapter:
     def _register_server_events(self) -> None:
         """Register server event handlers."""
         self.server.register_event_handler(
-            "server:klippy_ready", self._process_klippy_ready)
+            "server:klippy_ready", self._process_klippy_ready
+        )
         self.server.register_event_handler(
-            "server:klippy_shutdown", self._process_klippy_shutdown)
+            "server:klippy_shutdown", self._process_klippy_shutdown
+        )
         self.server.register_event_handler(
-            "server:klippy_disconnect", self._process_klippy_disconnect)
+            "server:klippy_disconnect", self._process_klippy_disconnect
+        )
         self.server.register_event_handler(
             "server:gcode_response", self.handle_gcode_response)
 
@@ -338,7 +341,7 @@ class TFTAdapter:
                 await asyncio.sleep(1.)
                 continue
             break
-        self.config_file: Dict[str, Any] = cfg_status.get("configfile", {}).get("config", {})
+        self.config: Dict[str, Any] = cfg_status.get("configfile", {}).get("tft_config", {})
 
         # Make subscription request
         sub_args: Dict[str, Optional[List[str]]] = {
@@ -586,7 +589,7 @@ class TFTAdapter:
             logging.debug("Unhandled response: %s", response)
 
     def _report(self, template, **data):
-        """Send report to tft."""
+        """Send report to TFT."""
         self.ser_conn.command(Template(template).render(**data))
 
     async def _autoreport(self, template, interval, data_callback):
@@ -868,7 +871,7 @@ class TFTAdapter:
     def _report_settings(self, **_: Any) -> None:
         """Report the printer settings."""
         self._report(f"{REPORT_SETTINGS_TEMPLATE}\nok", **(
-            self.object_status | {"config_file":self.config_file}))
+            self.object_status | {"config":self.config}))
 
     def _send_ok_response(self, **_: Any) -> None:
         """Send an "ok" response."""
@@ -917,7 +920,7 @@ class TFTAdapter:
         """Set the probe offsets."""
         if not args:
             self._report(PROBE_OFFSET_TEMPLATE, **(
-                self.object_status | {"config_file": self.config_file}))
+                self.object_status | {"config": self.config}))
         self.ser_conn.command("ok")
 
     def _load_filament(self) -> None:
@@ -994,7 +997,7 @@ class TFTAdapter:
         if arg_s == 120:  # Test
             cmd = "QUERY_PROBE"
         else:
-            if self.config_file.get("bltouch") is not None:
+            if self.config.get("bltouch") is not None:
                 value = {10: "pin_down", 90: "pin_up", 160: "reset"}.get(arg_s)
                 cmd = f"BLTOUCH_DEBUG COMMAND={value}"
             else:
@@ -1008,6 +1011,6 @@ class TFTAdapter:
                           "PROBE",
                           "G1 Z10"])
 
-def load_component(config_file: ConfigHelper) -> TFTAdapter:
+def load_component(config: ConfigHelper) -> TFTAdapter:
     """Load the TFT adapter component."""
-    return TFTAdapter(config_file)
+    return TFTAdapter(config)
