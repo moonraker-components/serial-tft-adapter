@@ -335,7 +335,6 @@ class TFTAdapter:
     async def _process_klippy_ready(self) -> None:
         """Handle the event when Klippy is ready."""
         retries = 10
-        cfg_status: Dict[str, Any] = {}
         while retries:
             try:
                 self.printer_info.update({"neopixel": await self.get_item("neopixel")})
