@@ -342,7 +342,7 @@ class TFTAdapter:
                 self.printer_info.update({"filament_switch_sensor": await self.get_item("filament_switch_sensor")})
                 klippy_info = await self.klippy_apis.get_klippy_info()
                 self.printer_info.update({"software_version": klippy_info.get("software_version")})
-                cfg_status = await self.klippy_apis.query_objects({"configfile": None})
+                configfile = await self.klippy_apis.query_objects({"configfile": None})
             except self.server.error:
                 logging.exception("TFT initialization request failed")
                 retries -= 1
@@ -351,7 +351,7 @@ class TFTAdapter:
                 await asyncio.sleep(1.)
                 continue
             break
-        self.printer_cfg: Dict[str, Any] = cfg_status.get("configfile", {}).get("config", {})
+        self.printer_cfg: Dict[str, Any] = configfile.get("configfile", {}).get("config", {})
 
         # Make subscription request
         sub_args: Dict[str, Optional[List[str]]] = {
