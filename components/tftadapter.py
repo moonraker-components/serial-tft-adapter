@@ -342,6 +342,7 @@ class TFTAdapter:
                 continue
             break
         self.printer_cfg: Dict[str, Any] = cfg_status.get("configfile", {}).get("config", {})
+        logging.info("Printer configuration: %s", self.printer_cfg)
 
         # Make subscription request
         sub_args: Dict[str, Optional[List[str]]] = {
