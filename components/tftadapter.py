@@ -216,8 +216,8 @@ class TFTAdapter:
         # Configuration values
         self.printer_info: Dict[str, Any] = {
             "machine_name": config.get("machine_name", "Klipper"),
-            "led_config_name": config.get('led_config_name', 'none'),
-            "filament_sensor": f"filament_switch_sensor {config.get('filament_sensor_name'), 'none'}",
+            "led_config_name": config.get('led_config_name'),
+            "filament_sensor": f"filament_switch_sensor {config.get('filament_sensor_name')}"
         }
 
         # Report tasks
