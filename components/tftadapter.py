@@ -35,8 +35,9 @@ from ..utils import ServerError
 if TYPE_CHECKING:
     from .power import PrinterPower
     from ..confighelper import ConfigHelper
-    from .klippy_apis import KlippyAPI as APIComp
-    from .file_manager.file_manager import FileManager as FMComp
+    from .klippy_apis import KlippyAPI
+    from .file_manager.file_manager import FileManager
+    from .database import MoonrakerDatabase
     FlexCallback = Callable[..., Optional[Coroutine]]
 
 PRINT_STATUS_TEMPLATE = (
@@ -202,8 +203,8 @@ class TFTAdapter:
         # Initialize all attributes in __init__
         self.server = config.get_server()
         self.event_loop = self.server.get_event_loop()
-        self.file_manager: FMComp = self.server.lookup_component("file_manager")
-        self.klippy_apis: APIComp = self.server.lookup_component("klippy_apis")
+        self.file_manager: FileManager = self.server.lookup_component("file_manager")
+        self.klippy_apis: KlippyAPI = self.server.lookup_component("klippy_apis")
 
         # Basic state
         self.object_status: Dict[str, Dict[str, Any]] = {}
@@ -213,11 +214,16 @@ class TFTAdapter:
         self.queue: List[Union[str, Tuple[FlexCallback, Any]]] = []
         self.last_printer_state: str = None
 
+        db: MoonrakerDatabase = self.server.lookup_component("database")
+        sync_provider = db.get_provider_wrapper()
+        mainsail_info: Dict[str, Any]
+        mainsail_info = sync_provider.get_item("mainsail", "general", {})
+
         # Configuration values
         self.printer_info: Dict[str, Any] = {
-            "machine_name": config.get("machine_name", "Klipper"),
-            "led_config_name": config.get('led_config_name'),
-            "filament_sensor": f"filament_switch_sensor {config.get('filament_sensor_name')}"
+            "machine_name": mainsail_info.get("printername", "Klipper"),
+            "led_config": None,
+            "filament_sensor": None
         }
 
         # Report tasks
@@ -326,7 +332,15 @@ class TFTAdapter:
         cfg_status: Dict[str, Any] = {}
         while retries:
             try:
+                objects = await self.klippy_apis.get_object_list(default=[])
+                # Log the full object name for neopixel and filament_switch_sensor
+                for object in objects:
+                    if "neopixel" in object:
+                        self.printer_info["led_config"] = object.split()[1]
+                    if "filament_switch_sensor" in object:
+                        self.printer_info["filament_sensor"] = object
                 klippy_info = await self.klippy_apis.get_klippy_info()
+                logging.info("Klippy Info: %s", klippy_info)
                 self.printer_info.update(
                     {"firmware_name": f"Marlin | Klipper {klippy_info.get('software_version')}"})
                 cfg_status = await self.klippy_apis.query_objects({"configfile": None})
@@ -351,8 +365,11 @@ class TFTAdapter:
             "heater_bed": None,
             "display_status": None,
             "print_stats": None,
-            "probe": None,
-            f"{self.printer_info.get('filament_sensor')}": None}
+            "probe": None
+        }
+        filament_sensor = self.printer_info.get('filament_sensor')
+        if filament_sensor:
+            sub_args[filament_sensor] = None
         try:
             self.object_status = await self.klippy_apis.query_objects(sub_args)
             await self.klippy_apis.subscribe_objects(sub_args, self._subcription_updates)
@@ -371,7 +388,7 @@ class TFTAdapter:
         printer_state = data_update.get("print_stats", {}).get("state")
         if printer_state is not None:
             self._print_status_change(printer_state,
-                                      self.object_status.get(self.printer_info.get("filament_sensor")))
+                                      self.object_status.get(self.printer_info.get("filament_sensor"), None))
         display_status = data_update.get("display_status")
         if data_update.get("display_status") is not None:
             self._display_status_change(display_status)
@@ -397,13 +414,13 @@ class TFTAdapter:
 
     def _print_status_change(self,
                              printer_state: Dict[str, Any],
-                             filament_sensor: Dict[str, Any]) -> None:
+                             filament_state: Dict[str, Any]) -> None:
         """Process print status changes."""
         logging.info("Previous printer state: %s", self.last_printer_state)
         filament_detected = None
-        if filament_sensor:
-            filament_detected = filament_sensor["filament_detected"]
-        logging.info("filament_sensor: %s", filament_sensor)
+        if filament_state:
+            filament_detected = filament_state["filament_detected"]
+        logging.info("filament_state: %s", filament_state)
         logging.info("filament_detected: %s", filament_detected)
         if printer_state == "printing":
             if self.last_printer_state == "paused":
@@ -710,12 +727,15 @@ class TFTAdapter:
 
     def _set_led(self, **args: Dict[int]) -> None:
         """Set the LED color and brightness."""
+        if self.printer_info.get("led_config") is None:
+            logging.warning("LED configuration name not set, skipping LED command")
+            return
         red = args.get("arg_r", 0) / 255
         green = args.get("arg_u", 0) / 255
         blue = args.get("arg_b", 0) / 255
         white = args.get("arg_w", 0) / 255
         brightness = args.get("arg_p", 255) / 255
-        self._queue_task(f"SET_LED LED={self.printer_info.get('led_config_name')} "
+        self._queue_task(f"SET_LED LED={self.printer_info.get('led_config')} "
                          f"RED={red * brightness:.3f} "
                          f"GREEN={green * brightness:.3f} "
                          f"BLUE={blue * brightness:.3f} "
@@ -832,8 +852,6 @@ class TFTAdapter:
 
                 for dir_name in dirs:
                     subpath = os.path.join(path, dir_name)
-                    sub_files = scan_directory(subpath)
-                    files.extend([(f"{dir_name}/{f[0]}", f[1], f[2]) for f in sub_files["files"]])
 
                 return {"files": files, "dirs": dirs}
             except Exception as e:
@@ -859,11 +877,10 @@ class TFTAdapter:
 
     def _report_software_endstops(self) -> None:
         """Report the status of software endstops."""
-        filament_sensor=self.object_status.get(self.printer_info.get("filament_sensor"), {})
-        state = { "state": "On" if filament_sensor.get("enabled", False) else "Off"}
+        filament_state = self.object_status.get(self.printer_info.get("filament_sensor"), None)
+        state = {"state": "On" if filament_state and filament_state.get("enabled", False) else "Off"}
         self._report("Soft endstops: {{ state }}\nok", **state)
-        self._print_status_change(self.object_status.get("print_stats", {}).get("state"),
-                                  self.object_status.get(self.printer_info.get("filament_sensor")))
+        self._print_status_change(self.object_status.get("print_stats", {}).get("state"), filament_state)
 
     def _report_settings(self, **_: Any) -> None:
         """Report the printer settings."""
