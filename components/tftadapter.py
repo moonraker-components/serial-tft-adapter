@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from .klippy_apis import KlippyAPI
     from .file_manager.file_manager import FileManager
     from .database import MoonrakerDatabase
+    from .machine import Machine
     FlexCallback = Callable[..., Optional[Coroutine]]
 
 PRINT_STATUS_TEMPLATE = (
@@ -81,6 +82,8 @@ FIRMWARE_INFO_TEMPLATE = (
     "FIRMWARE_NAME:Marlin | Klipper {{ software_version }} "
     "SOURCE_CODE_URL:https://github.com/Klipper3d/klipper "
     "PROTOCOL_VERSION:1.0 "
+    "ACCESS_POINT:{{ network.ssid }} "
+    "IP_ADDRESS:{{ network.address }} "
     "MACHINE_TYPE:{{ printername }}\n"
     "Auto Bed Leveling\n"
     "Cap:EXTRUDER_COUNT:1\n"
@@ -205,9 +208,8 @@ class TFTAdapter:
         self.event_loop = self.server.get_event_loop()
         self.file_manager: FileManager = self.server.lookup_component("file_manager")
         self.klippy_apis: KlippyAPI = self.server.lookup_component("klippy_apis")
+        self.machine: Machine = self.server.lookup_component("machine")
         database: MoonrakerDatabase = self.server.lookup_component("database")
-        sync_provider = database.get_provider_wrapper()
-        mainsail_info = sync_provider.get_item("mainsail", "general", {})
 
         # Basic state
         self.object_status: Dict[str, Dict[str, Any]] = {}
@@ -216,6 +218,9 @@ class TFTAdapter:
         self.is_busy: bool = False
         self.queue: List[Union[str, Tuple[FlexCallback, Any]]] = []
         self.last_printer_state: str = None
+
+        sync_provider = database.get_provider_wrapper()
+        mainsail_info = sync_provider.get_item("mainsail", "general", {})
 
         # Configuration values
         self.printer_info: Dict[str, Any] = {
@@ -335,10 +340,12 @@ class TFTAdapter:
         retries = 10
         while retries:
             try:
-                self.printer_info.update({"neopixel": await self.get_item("neopixel")})
-                self.printer_info.update({"filament_switch_sensor": await self.get_item("filament_switch_sensor")})
                 klippy_info = await self.klippy_apis.get_klippy_info()
-                self.printer_info.update({"software_version": klippy_info.get("software_version")})
+                network = await self.machine.get_public_network()
+                self.printer_info.update({"network": network,
+                                          "neopixel": await self.get_item("neopixel"),
+                                          "filament_switch_sensor": await self.get_item("filament_switch_sensor"),
+                                          "software_version": klippy_info.get("software_version")})
                 configfile = await self.klippy_apis.query_objects({"configfile": None})
             except self.server.error:
                 logging.exception("TFT initialization request failed")
@@ -983,6 +990,7 @@ class TFTAdapter:
         """Report the firmware information."""
         self._report(FIRMWARE_INFO_TEMPLATE, **(
             self.object_status |
+            {"network": self.printer_info.get("network")} |
             {"printername": self.printer_info.get("printername")} |
             {"software_version": self.printer_info.get("software_version")}))
 
