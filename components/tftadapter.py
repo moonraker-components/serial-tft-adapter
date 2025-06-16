@@ -79,7 +79,7 @@ REPORT_SETTINGS_TEMPLATE = (
 )
 
 FIRMWARE_INFO_TEMPLATE = (
-    "FIRMWARE_NAME:Marlin | Klipper {{ software_version }} "
+    "FIRMWARE_NAME:Klipper {{ software_version }} "
     "SOURCE_CODE_URL:https://github.com/Klipper3d/klipper "
     "PROTOCOL_VERSION:1.0 "
     "ACCESS_POINT:{{ network.ssid }} "
@@ -988,11 +988,7 @@ class TFTAdapter:
 
     def _report_firmware_info(self) -> None:
         """Report the firmware information."""
-        self._report(FIRMWARE_INFO_TEMPLATE, **(
-            self.object_status |
-            {"network": self.printer_info.get("network")} |
-            {"printername": self.printer_info.get("printername")} |
-            {"software_version": self.printer_info.get("software_version")}))
+        self._report(FIRMWARE_INFO_TEMPLATE, **(self.object_status | self.printer_info))
 
     def _z_offset_apply_probe(self) -> List[str]:
         """Apply the Z offset from the probe."""
