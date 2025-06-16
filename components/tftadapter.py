@@ -224,9 +224,7 @@ class TFTAdapter:
 
         # Configuration values
         self.printer_info: Dict[str, Any] = {
-            "printername": mainsail_info.get("printername", "Klipper"),
-            "neopixel": None,
-            "filament_switch_sensor": None
+            "printername": mainsail_info.get("printername", "Klipper")
         }
 
         # Report tasks
