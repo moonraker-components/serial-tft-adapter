@@ -35,7 +35,7 @@ to your Moonraker configuration file:
     [gcode_button LCD_BUTTON_PRESS]
     pin: !opi:gpiochip1/gpio2
     press_gcode:
-    RESTART
+      RESTART
     ```
 6. Restart Moonraker to apply the changes:
     ```sh
